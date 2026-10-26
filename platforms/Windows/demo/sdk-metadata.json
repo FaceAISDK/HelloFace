@@ -1,0 +1,28 @@
+{
+  "version": "0.7.0",
+  "status": "beta-candidate",
+  "architecture": "x64",
+  "compute": "CPU",
+  "windowsExecutionAcceptance": "pending",
+  "cameraDeviceAcceptance": "pending",
+  "uiInteractionAcceptance": "pending",
+  "modelPackaging": "embedded-encrypted",
+  "validityPolicy": "independent-offline",
+  "sdkLayout": "binary-only",
+  "sampleData": "ai-generated-faces",
+  "packageRole": "demo",
+  "layering": "Binary C ABI SDK with built-in encrypted resources; integration adapter belongs to Demo",
+  "demoModules": [
+    "detection",
+    "capture",
+    "verification",
+    "liveness",
+    "search",
+    "image-search",
+    "gallery",
+    "camera"
+  ],
+  "releaseChannel": "beta",
+  "proprietaryCoffSymbols": "removed",
+  "authenticode": "unsigned"
+}

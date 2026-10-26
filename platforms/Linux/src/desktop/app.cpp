@@ -1,0 +1,501 @@
+#include "app.h"
+#include "lighting.h"
+#include "frame_pool.h"
+#include "navigation.h"
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+
+namespace hiface_linux_demo {
+namespace {
+constexpr int kPreviewFps = 25;
+constexpr int64_t kPreviewIntervalMs = 1000 / kPreviewFps;
+constexpr int64_t kAnalysisIntervalMs = 125; // Target 8 FPS; actual rate is reported separately. / 目标为 8 FPS，实际帧率另行报告。
+int environmentInteger(const char* name, int fallback, int low, int high) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    return end && !*end && parsed >= low && parsed <= high ? static_cast<int>(parsed) : fallback;
+}
+std::vector<Box> previewBoxes(const std::vector<Box>& source, const CameraFrame* analysis,
+                              const CameraFrame* preview) {
+    if (!analysis || !preview ||
+        (analysis->width == preview->width && analysis->height == preview->height))
+        return source;
+    const float x_scale = float(preview->width) / analysis->width;
+    const float y_scale = float(preview->height) / analysis->height;
+    auto mapped = source;
+    for (auto& box : mapped) {
+        box.x *= x_scale; box.width *= x_scale;
+        box.y *= y_scale; box.height *= y_scale;
+        for (auto& point : box.points) { point.x *= x_scale; point.y *= y_scale; }
+    }
+    return mapped;
+}
+}
+DesktopApp::DesktopApp(std::string models, std::string database, std::string device, bool smoke, std::string assets)
+    : smoke_(smoke), capture_worker_([this] { captureLoop(); }),
+      worker_([this, models, database, device, smoke, assets] { run(models, database, device, smoke, assets); }) {}
+DesktopApp::~DesktopApp() {
+    stopping_ = true;
+    capture_changed_.notify_all();
+    work_changed_.notify_all();
+    if (worker_.joinable()) worker_.join();
+    if (capture_worker_.joinable()) capture_worker_.join();
+}
+void DesktopApp::post(Command command) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    work_changed_.notify_one();
+    if (command.type == "image-search" || command.type == "cancel-image-search") {
+        command.request_id = ++photo_generation_;
+        commands_.erase(std::remove_if(commands_.begin(), commands_.end(), [](const Command& queued) { return queued.type == "image-search" || queued.type == "cancel-image-search"; }), commands_.end());
+        auto pending = std::make_shared<ViewState>(*state_);
+        pending->visual_revision = ++visual_revision_;
+        pending->photo_search_generation = command.request_id; pending->photo_search_busy = pending->busy = true; pending->failed = false;
+        pending->search_photo.reset(); pending->photo_search.reset(); pending->search_photo_path.clear();
+        pending->status = command.type == "image-search" ? "Queued photo search..." : "Cancelling photo search..."; state_ = std::move(pending);
+        commands_.push_back(std::move(command)); return;
+    }
+    // Bound repeated key presses while a model call is in flight.
+    // 模型调用执行期间限制重复按键产生的任务数量。
+    if (commands_.size() < 32) {
+        auto pending = std::make_shared<ViewState>(*state_); pending->busy = true; pending->visual_revision = ++visual_revision_;
+        state_ = std::move(pending); commands_.push_back(std::move(command));
+    }
+}
+std::shared_ptr<const ViewState> DesktopApp::snapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!capture_state_.active) return state_;
+    auto view = std::make_shared<ViewState>(*state_);
+    if (capture_state_.active) {
+        view->connected = capture_state_.ready;
+        view->camera = capture_state_.description;
+        view->frame = capture_state_.frame;
+        view->fps = capture_state_.fps;
+        view->preview_sequence = capture_state_.sequence;
+        view->lighting = capture_state_.lighting;
+        if (!capture_state_.error.empty()) {
+            view->failed = true;
+            view->status = capture_state_.error;
+        }
+    }
+    return view;
+}
+DesktopApp::CaptureState DesktopApp::captureSnapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return capture_state_;
+}
+void DesktopApp::configureCapture(const std::string& device, const DemoSettings& settings, bool open) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    const uint64_t generation = ++capture_request_.generation;
+    capture_request_.open = open;
+    capture_request_.device = device;
+    capture_request_.width = settings.camera_width;
+    capture_request_.height = settings.camera_height;
+    capture_request_.fps = std::clamp(settings.camera_fps, 20, kPreviewFps);
+    capture_request_.mjpeg = settings.camera_mjpeg;
+    const char* preview_device = std::getenv("HIFACE_PREVIEW_DEVICE");
+    capture_request_.preview_device = preview_device ? preview_device : "";
+    capture_request_.preview_width = environmentInteger("HIFACE_PREVIEW_WIDTH", 1280, 2, 1920);
+    capture_request_.preview_height = environmentInteger("HIFACE_PREVIEW_HEIGHT", 720, 2, 1080);
+    capture_request_.preview_output_width = environmentInteger("HIFACE_PREVIEW_OUTPUT_WIDTH", 576, 2, 1920);
+    capture_request_.preview_output_height = environmentInteger("HIFACE_PREVIEW_OUTPUT_HEIGHT", 1024, 2, 1920);
+    capture_changed_.notify_all();
+    capture_changed_.wait(lock, [&] { return stopping_ || capture_completed_ >= generation; });
+    if (stopping_) return;
+    if (open && !capture_state_.error.empty()) throw DemoError{capture_state_.error};
+}
+void DesktopApp::captureLoop() {
+    Camera camera, preview_camera;
+    CameraFramePool preview_pool, analysis_pool;
+    CameraLighting lighting;
+    const char* light_device_env = std::getenv("HIFACE_LIGHT_CAMERA_DEVICE");
+    const std::string light_device = light_device_env ? light_device_env : "/dev/video31";
+    uint64_t handled = 0;
+    int64_t fps_start = monotonicMilliseconds(), next_synthetic = fps_start, next_analysis_capture = fps_start;
+    uint32_t frames = 0;
+    while (!stopping_) {
+        CaptureRequest request;
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            request = capture_request_;
+            if (capture_request_.generation != handled) {
+                changed = true;
+            }
+        }
+        if (changed) {
+            lighting.stop();
+            camera.close();
+            preview_camera.close();
+            CaptureState next;
+            next.active = request.open;
+            next.last_frame_ms = next.last_analysis_ms = monotonicMilliseconds();
+            fps_start = next.last_frame_ms;
+            next_synthetic = fps_start;
+            next_analysis_capture = fps_start;
+            frames = 0;
+            try {
+                if (request.open) {
+                    if (smoke_) {
+                        auto frame = std::make_shared<CameraFrame>();
+                        rgbaFrame(Image{640, 360, std::vector<uint8_t>(640 * 360 * 4, 128)}, *frame);
+                        next.ready = true;
+                        next.description = "Synthetic frame / desktop smoke test";
+                        next.frame = std::move(frame);
+                    } else {
+                        camera.open(request.device, request.width, request.height, request.fps, request.mjpeg);
+                        next.ready = true;
+                        next.description = camera.description();
+                        const bool wants_dual = !request.preview_device.empty() && request.preview_device != request.device;
+                        if (wants_dual) try {
+                            preview_camera.open(request.preview_device, request.preview_width,
+                                request.preview_height, request.fps, false);
+                            next.dual_preview = true;
+                            next.description = "Preview: " + preview_camera.description() + " -> " +
+                                std::to_string(request.preview_output_width) + "x" +
+                                std::to_string(request.preview_output_height) + " RGA | Recognition: " +
+                                camera.description();
+                        } catch (const DemoError& error) {
+                            preview_camera.close();
+                            next.description += " | HD preview fallback: " + error.message;
+                        }
+                    }
+                }
+            } catch (const DemoError& error) {
+                next.error = error.message;
+                next.description = "Camera disconnected";
+                camera.close();
+                preview_camera.close();
+            } catch (const std::exception& error) {
+                next.error = error.what();
+                next.description = "Camera disconnected";
+                camera.close();
+                preview_camera.close();
+            } catch (...) {
+                next.error = "Unexpected camera failure";
+                next.description = "Camera disconnected";
+                camera.close();
+                preview_camera.close();
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                capture_state_ = std::move(next);
+                capture_completed_ = request.generation;
+                handled = request.generation;
+            }
+            capture_changed_.notify_all();
+            continue;
+        }
+
+        bool ready = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ready = capture_state_.active && capture_state_.ready;
+        }
+        if (!ready) {
+            lighting.stop();
+            std::unique_lock<std::mutex> lock(mutex_);
+            capture_changed_.wait(lock, [&] {
+                return stopping_ || capture_request_.generation != handled;
+            });
+            continue;
+        }
+
+        try {
+            const bool lighting_active = !smoke_ && request.device == light_device;
+            lighting.update(nullptr, lighting_active);
+            std::shared_ptr<CameraFrame> frame, analysis_frame;
+            const auto now = monotonicMilliseconds();
+            if (smoke_) {
+                if (now < next_synthetic) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    continue;
+                }
+                next_synthetic = now + kPreviewIntervalMs;
+                std::lock_guard<std::mutex> lock(mutex_);
+                frame = capture_state_.frame;
+                analysis_frame = frame;
+            } else {
+                bool dual = false;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    dual = capture_state_.dual_preview;
+                }
+                if (dual) {
+                    try {
+                        if (preview_camera.waitForFrame(10)) {
+                            auto candidate = preview_pool.acquire();
+                            if (candidate && preview_camera.readPreview(*candidate, request.preview_output_width,
+                                    request.preview_output_height)) frame = std::move(candidate);
+                        }
+                    } catch (const DemoError& error) {
+                        preview_camera.close();
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        capture_state_.dual_preview = false;
+                        capture_state_.description = camera.description() + " | HD preview fallback: " + error.message;
+                    }
+                    if (now >= next_analysis_capture) {
+                        auto candidate = analysis_pool.acquire();
+                        if (candidate && camera.readAnalysis(*candidate)) {
+                            analysis_frame = std::move(candidate);
+                            next_analysis_capture = now + kAnalysisIntervalMs;
+                        }
+                    }
+                    if (!frame && !analysis_frame) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
+                } else {
+                    auto candidate = preview_pool.acquire();
+                    if (!candidate || !camera.waitForFrame(10) || !camera.read(*candidate)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                        continue;
+                    }
+                    frame = analysis_frame = std::move(candidate);
+                }
+            }
+            const auto captured = monotonicMilliseconds();
+            if (analysis_frame) lighting.update(analysis_frame.get(), lighting_active);
+            if (frame) ++frames;
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (capture_request_.generation != handled || !capture_state_.active) continue;
+            capture_state_.lighting = lighting.status();
+            if (frame) {
+                capture_state_.frame = std::move(frame);
+                capture_state_.last_frame_ms = captured;
+                ++capture_state_.sequence;
+            }
+            if (analysis_frame) {
+                capture_state_.analysis_frame = std::move(analysis_frame);
+                capture_state_.last_analysis_ms = captured;
+                ++capture_state_.analysis_sequence;
+                work_changed_.notify_one();
+                if (!capture_state_.dual_preview && !capture_state_.frame)
+                    capture_state_.frame = capture_state_.analysis_frame;
+            }
+            if (captured - fps_start >= 1000) {
+                capture_state_.fps = frames * 1000.0 / std::max<int64_t>(1, captured - fps_start);
+                frames = 0;
+                fps_start = captured;
+            }
+        } catch (const DemoError& error) {
+            lighting.stop();
+            camera.close();
+            preview_camera.close();
+            std::lock_guard<std::mutex> lock(mutex_);
+            capture_state_.ready = false;
+            capture_state_.frame.reset();
+            capture_state_.analysis_frame.reset();
+            capture_state_.error = error.message;
+            capture_state_.description = "Camera disconnected";
+        } catch (const std::exception& error) {
+            lighting.stop();
+            camera.close();
+            preview_camera.close();
+            std::lock_guard<std::mutex> lock(mutex_);
+            capture_state_.ready = false;
+            capture_state_.frame.reset();
+            capture_state_.analysis_frame.reset();
+            capture_state_.error = error.what();
+            capture_state_.description = "Camera disconnected";
+        }
+    }
+    camera.close();
+    preview_camera.close();
+}
+void DesktopApp::run(const std::string& models, const std::string& database, std::string device, bool smoke, const std::string& assets) {
+    auto publish = [&](std::shared_ptr<ViewState> state) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        state->visual_revision = ++visual_revision_;
+        if (state->ready && state->photo_search_generation != photo_generation_) {
+            state->photo_search_generation = photo_generation_; state->photo_search_busy = state->busy = true;
+            state->search_photo.reset(); state->photo_search.reset(); state->search_photo_path.clear(); state->failed = false; state->status = state_->status;
+        }
+        state_ = std::move(state);
+    };
+    try {
+        const auto data = std::filesystem::path(database).has_parent_path() ? std::filesystem::path(database).parent_path() : std::filesystem::path(".");
+        const auto fixture = std::filesystem::path(assets) / "features_10000.json";
+        const std::string demo_features = std::filesystem::exists(fixture) ? fixture.string() : "";
+        std::filesystem::create_directories(data);
+        // Only this worker creates or calls SDK/database resources; V4L2 belongs to captureLoop().
+        // 仅此工作线程创建和调用 SDK/数据库资源；V4L2 由 captureLoop() 持有。
+        FaceWorkflow workflow(models, database);
+        bool failed = false;
+        uint64_t settings_attempt = 0, photo_generation = 0;
+        std::string page = "home", gallery_id, gallery_group, gallery_tag;
+        uint32_t gallery_offset = 0;
+        int next_index = 0;
+        int64_t analysis_fps_start = monotonicMilliseconds(), next_analysis = analysis_fps_start, last_publish = 0;
+        uint64_t analyzed_sequence = 0;
+        uint32_t analysis_frames = 0;
+        double analysis_fps = 0;
+        if (device.rfind("/dev/video", 0) == 0) try { next_index = std::stoi(device.substr(10)); } catch (...) {}
+        auto connect = [&] {
+            workflow.clearPageResults();
+            configureCapture(device, workflow.settings(), true);
+            analyzed_sequence = 0;
+            analysis_fps_start = next_analysis = monotonicMilliseconds();
+            analysis_frames = 0;
+            analysis_fps = 0;
+            workflow.status = "Camera connected. Look at the camera.";
+        };
+        workflow.status = "Choose a feature from Home to begin.";
+        auto gallery = [&] { workflow.loadGallery(gallery_offset, gallery_id, gallery_group, gallery_tag); };
+        while (!stopping_) {
+            std::vector<Command> commands;
+            { std::lock_guard<std::mutex> lock(mutex_); commands.swap(commands_); }
+            bool workflow_updated = !commands.empty();
+            for (const auto& command : commands) {
+                const bool photo_command = command.type == "image-search" || command.type == "cancel-image-search";
+                if (photo_command && command.request_id != photo_generation_) continue;
+                if (photo_command) photo_generation = command.request_id;
+                if (command.type == "settings") ++settings_attempt;
+                auto working = std::make_shared<ViewState>(*snapshot());
+                working->busy = true; working->failed = false; working->status = command.type == "image-search" ? "Detecting and searching every face..." : command.type == "image" ? "Processing photo" : command.type == "import" ? "Reading import source" : "Applying request";
+                publish(working);
+                try {
+                    failed = false;
+                    const auto& v = command.values;
+                    if (workflow.importing()) require(command.type == "cancel-import" || command.type == "gallery",
+                        "Stop the import before another operation");
+                    if (command.type == "page") {
+                        require(v.at(0) == "home" || demoPage(v.at(0)), "Unknown feature page");
+                        workflow.clearPageResults(); page = v.at(0); analysis_fps = 0; analysis_frames = 0;
+                        if (cameraPage(page)) connect(); else configureCapture(device, workflow.settings(), false);
+                        if (page == "gallery") gallery();
+                        if (page == "image-search") workflow.status = workflow.photoSearchSummary();
+                        if (page == "camera-settings") workflow.status = "Camera preferences only: apply to save, then open a camera feature. No camera or analysis is running.";
+                        if (page == "home") workflow.status = "Choose a feature from Home to begin.";
+                        if (page == "images") workflow.status = "Choose two photos to compare. Photo comparison does not perform liveness.";
+                        if (page == "settings") workflow.status = "Edit detection, flow and search preferences, then apply to save.";
+                    } else if (command.type == "image-search") {
+                        page = "image-search"; configureCapture(device, workflow.settings(), false);
+                        workflow.searchPhoto(v.at(0), [&] { return stopping_ || command.request_id != photo_generation_; });
+                    } else if (command.type == "cancel-image-search") { workflow.clearPhotoSearch(); workflow.status = "Photo search cancelled.";
+                    } else if (command.type == "action") {
+                        require(captureSnapshot().ready, "Connect a camera first"); workflow.action(v.at(0).at(0));
+                    } else if (command.type == "connect") { device = v.at(0); connect(); }
+                    else if (command.type == "next") {
+                        bool connected = false;
+                        for (int i = 0; i < 64; ++i) {
+                            next_index = (next_index + 1) % 64; device = "/dev/video" + std::to_string(next_index);
+                            if (!std::filesystem::exists(device)) continue;
+                            try { connect(); connected = true; break; } catch (const DemoError&) {}
+                        }
+                        if (!connected) workflow.status = "No usable camera. Connect the USB device to Ubuntu and check /dev/video* permissions.";
+                    } else if (command.type == "mirror") workflow.toggleMirror();
+                    else if (command.type == "pause") workflow.pauseSearch();
+                    else if (command.type == "settings") { workflow.applySettings(parseSettings(command.fields)); }
+                    else if (command.type == "confirm-enrollment") { workflow.confirmEnrollment(v.at(0), v.at(1), v.at(2)); }
+                    else if (command.type == "enroll") {
+                        require(captureSnapshot().ready, "Connect a camera first"); workflow.setEnrollment(v.at(0), v.at(1), v.at(2)); workflow.action('E');
+                    } else if (command.type == "image") {
+                        configureCapture(device, workflow.settings(), false); analysis_fps = 0; analysis_frames = 0;
+                        workflow.imageOperation(v.at(0), v.at(1), v.at(2), v.at(3), v.at(4), v.at(5));
+                    }
+                    else if (command.type == "gallery") {
+                        gallery_offset = static_cast<uint32_t>(std::stoul(v.at(0))); gallery_id = v.at(1); gallery_group = v.at(2); gallery_tag = v.at(3); gallery();
+                    } else if (command.type == "delete") { workflow.deleteEntry(v.at(0)); gallery(); workflow.status = "Deleted " + v.at(0); }
+                    else if (command.type == "metadata") { workflow.updateEntry(v.at(0), v.at(1), v.at(2)); gallery(); }
+                    else if (command.type == "reference") workflow.selectReference(v.at(0));
+                    else if (command.type == "clear-reference") workflow.clearReference();
+                    else if (command.type == "export") workflow.exportGallery(v.at(0), gallery_group, gallery_tag);
+                    else if (command.type == "import") workflow.startImport(v.at(0), v.at(1) == "images", v.at(2));
+                    else if (command.type == "cancel-import") { workflow.cancelImport(); const auto status = workflow.status; gallery(); workflow.status = status; }
+                } catch (const DemoError& error) { failed = true; workflow.status = error.message; std::fprintf(stderr, "[Demo] %s\n", error.message.c_str()); }
+                catch (const std::exception& error) { failed = true; workflow.status = error.what(); }
+                catch (...) { failed = true; workflow.status = "Unexpected command failure"; }
+            }
+            if (workflow.importing()) {
+                try {
+                    workflow.stepImport();
+                    if (!workflow.importing()) { const auto status = workflow.status; gallery(); workflow.status = status; workflow_updated = true; }
+                } catch (const DemoError& error) { failed = true; workflow.status += " | " + error.message; }
+                catch (const std::exception& error) { failed = true; workflow.cancelImport(); workflow.status = error.what(); }
+            }
+            if (cameraPage(page) && !workflow.importing() && !workflow.pendingEnrollment()) {
+                const auto latest = captureSnapshot();
+                const auto now = monotonicMilliseconds();
+                if (!latest.error.empty()) {
+                    failed = true;
+                    workflow.stop();
+                    workflow.status = latest.error;
+                } else if (latest.ready && latest.analysis_frame && latest.analysis_sequence != analyzed_sequence && now >= next_analysis) {
+                    analyzed_sequence = latest.analysis_sequence;
+                    const auto begin = now;
+                    if (workflow.mode() != 'P') {
+                        try { workflow.process(*latest.analysis_frame); }
+                        catch (const DemoError& error) { failed = true; workflow.stop(); workflow.status = error.message; }
+                        ++analysis_frames; workflow_updated = true;
+                    }
+                    next_analysis = begin + kAnalysisIntervalMs;
+                }
+            }
+            if (workflow.pendingEnrollment()) { analysis_fps = 0; analysis_frames = 0; }
+            const auto now = monotonicMilliseconds();
+            if (now - analysis_fps_start >= 1000) {
+                analysis_fps = analysis_frames * 1000.0 / std::max<int64_t>(1, now - analysis_fps_start);
+                analysis_frames = 0;
+                analysis_fps_start = now;
+            }
+            // Capture snapshots carry the newest preview independently. Only
+            // copy the larger workflow/gallery state after actual work or the
+            // one-second status heartbeat, not 33 times per second while idle.
+            // 采集快照独立携带最新预览；仅在实际工作完成或一秒状态心跳时复制较大的工作流与库状态，不在空闲时每秒复制 33 次。
+            if (now - last_publish >= 1000 || workflow_updated || (workflow.importing() && now - last_publish >= 30)) {
+                const auto capture = captureSnapshot();
+                auto state = std::make_shared<ViewState>();
+                state->ready = true; state->importing = workflow.importing(); state->connected = capture.ready;
+                state->pending_enrollment = workflow.pendingEnrollment(); state->enrollment_generation = workflow.enrollmentGeneration();
+                state->failed = failed; state->settings_attempt = settings_attempt;
+                state->photo_search_generation = photo_generation;
+                state->search_photo = workflow.search_photo; state->photo_search = workflow.photo_search; state->search_photo_path = workflow.search_photo_path;
+                state->import_saved = workflow.import_saved; state->import_failed = workflow.import_failed; state->import_processed = workflow.import_processed; state->import_total = workflow.import_total;
+                state->status = workflow.status; state->camera = capture.description; state->lighting = capture.lighting;
+                state->device = device; state->reference = workflow.reference_id; state->data_directory = data.string();
+                state->demo_features = demo_features;
+                state->mode = workflow.mode(); state->count = workflow.gallery_count; state->filtered_count = workflow.filtered_count; state->gallery_offset = workflow.gallery_offset;
+                state->settings = workflow.settings(); state->milliseconds = workflow.inference_ms;
+                state->fps = capture.fps; state->analysis_fps = analysis_fps; state->frame = capture.frame;
+                state->preview_sequence = capture.sequence;
+                if (cameraPage(page) && capture.ready && now - capture.last_frame_ms > 3000)
+                    state->status = "Camera is connected but no frames arrived for 3 seconds. Check VMware USB passthrough or reconnect.";
+                state->boxes = previewBoxes(workflow.boxes, capture.analysis_frame.get(), capture.frame.get());
+                if (cameraPage(page) && (now - capture.last_frame_ms > 500 || state->mode == 'P')) state->boxes.clear();
+                state->gallery = workflow.gallery_rows; state->image_first = workflow.image_first; state->image_second = workflow.image_second; state->aligned_preview = workflow.aligned_preview;
+                state->image_matches = workflow.image_matches;
+                publish(state); last_publish = now;
+            }
+            if (workflow.importing()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            else {
+                std::unique_lock<std::mutex> lock(mutex_);
+                auto deadline = last_publish + 1000;
+                if (cameraPage(page) && !workflow.pendingEnrollment() && capture_state_.ready && capture_state_.analysis_frame && capture_state_.analysis_sequence != analyzed_sequence)
+                    deadline = std::min(deadline, std::max(now + 1, next_analysis));
+                work_changed_.wait_for(lock, std::chrono::milliseconds(std::max<int64_t>(1, deadline - now)), [&] {
+                    return stopping_ || !commands_.empty() || (cameraPage(page) && !workflow.pendingEnrollment() && capture_state_.ready &&
+                        capture_state_.analysis_sequence != analyzed_sequence && monotonicMilliseconds() >= next_analysis);
+                });
+            }
+        }
+        configureCapture(device, workflow.settings(), false);
+        workflow.cancelImport(); workflow.stop();
+    } catch (const DemoError& error) {
+        auto state = std::make_shared<ViewState>();
+        state->failed = true; state->initialization_status = error.status;
+        state->status = "SDK initialization failed: " + error.message;
+        const auto now = std::time(nullptr); std::tm utc{}; char formatted[32]{};
+        if (gmtime_r(&now, &utc) && std::strftime(formatted, sizeof(formatted), "%Y-%m-%d %H:%M:%S UTC", &utc))
+            state->device_time_utc = formatted;
+        std::fprintf(stderr, "[Startup] %s | device_time=%s\n", state->status.c_str(), state->device_time_utc.c_str());
+        publish(state);
+    }
+    catch (const std::exception& error) { auto state = std::make_shared<ViewState>(); state->failed = true; state->status = error.what(); publish(state); }
+    catch (...) { auto state = std::make_shared<ViewState>(); state->failed = true; state->status = "Unexpected worker failure"; publish(state); }
+}
+}

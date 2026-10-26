@@ -1,0 +1,53 @@
+name: Windows Demo
+on:
+  push:
+    branches: [main]
+    paths: ["platforms/Windows/**", ".github/workflows/windows-demo.yml"]
+  pull_request:
+    paths: ["platforms/Windows/**", ".github/workflows/windows-demo.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-demo-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: platforms/Windows
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - name: Compile independent consumers and Demo without a publisher private key
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Sdk = Join-Path $PWD "sdk"
+          foreach ($Role in @("sdk", "demo")) {
+            $Source = if ($Role -eq "sdk") { "examples" } else { "demo/source" }
+            $Build = Join-Path "build" $Role
+            cmake -S $Source -B $Build -G "Visual Studio 17 2022" -A x64 "-DCMAKE_PREFIX_PATH=$Sdk"
+            if ($LASTEXITCODE -ne 0) { throw "Independent $Role configuration failed" }
+            cmake --build $Build --config Release --parallel 2
+            if ($LASTEXITCODE -ne 0) { throw "Independent $Role compilation failed" }
+          }
+          # Runtime checks use the unchanged signed portable Demo below, not these unsigned executables.
+      - name: Verify the original portable Demo without changing its binaries
+        run: |
+          $Destination = Join-Path $env:RUNNER_TEMP "HelloFace-Windows-demo"
+          Copy-Item -Recurse demo $Destination
+          & "$Destination/bin/hiface_cli.exe" self-test
+          if ($LASTEXITCODE -ne 0) { throw "Portable Demo self-test failed" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: HelloFace-Windows-demo
+          path: ${{ runner.temp }}/HelloFace-Windows-demo
+          retention-days: 30
+          if-no-files-found: error

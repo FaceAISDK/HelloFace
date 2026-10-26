@@ -1,0 +1,48 @@
+name: Linux integration Demo
+on:
+  push:
+    paths: ['platforms/Linux/**', '.github/workflows/linux-demo.yml']
+  pull_request:
+    paths: ['platforms/Linux/**', '.github/workflows/linux-demo.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: linux-demo-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  integration:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-22.04, arch: x86_64}
+          - {runner: ubuntu-24.04, arch: x86_64}
+          - {runner: ubuntu-22.04-arm, arch: arm64}
+          - {runner: ubuntu-24.04-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: platforms/Linux
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install integration build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libx11-6 xvfb xauth
+      - name: Verify signed prebuilt Demo and compile the SDK example
+        run: |
+          SDK="$PWD/runtimes/${{ matrix.arch }}/sdk"
+          (cd "$SDK" && sha256sum -c FILES.sha256)
+          ./self-test.sh
+          cmake -S examples/image-search -B build/consumer -DCMAKE_PREFIX_PATH="$SDK"
+          cmake --build build/consumer --parallel 2
+      - name: Compile Demo using binary SDK only
+        run: |
+          cmake -S . -B build/demo -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/demo --parallel 2
+          # Rebuilt executables are compile-only without the integrating application's publisher identity.
+      - name: Exercise original signed desktop with synthetic frames
+        run: |
+          xvfb-run -a -s '-screen 0 1024x768x24' "./runtimes/${{ matrix.arch }}/bin/hiface_desktop" --builtin "$RUNNER_TEMP/prebuilt/faces.db" --smoke-test

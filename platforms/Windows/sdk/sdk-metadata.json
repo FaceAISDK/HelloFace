@@ -1,0 +1,15 @@
+{
+  "version": "0.7.0",
+  "status": "development-candidate",
+  "architecture": "x64",
+  "compute": "CPU",
+  "windowsExecutionAcceptance": "pending",
+  "cameraDeviceAcceptance": "pending",
+  "uiInteractionAcceptance": "pending",
+  "modelPackaging": "embedded-encrypted",
+  "validityPolicy": "independent-offline",
+  "sdkLayout": "binary-only",
+  "sampleData": "none",
+  "packageRole": "sdk",
+  "layering": "Binary C ABI SDK with built-in encrypted resources; integration adapter belongs to Demo"
+}

@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(HiFaceCConsumer LANGUAGES C)
+find_package(HiFace CONFIG REQUIRED)
+add_executable(hiface_sdk_image_search image_search.c)
+target_link_libraries(hiface_sdk_image_search PRIVATE HiFace::HiFace)
+add_executable(hiface_sdk_infrared_liveness infrared_liveness.c)
+target_link_libraries(hiface_sdk_infrared_liveness PRIVATE HiFace::HiFace)

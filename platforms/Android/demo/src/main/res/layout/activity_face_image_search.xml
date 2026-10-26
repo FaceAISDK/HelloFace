@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/content_background">
+
+    <!-- 复用内容页导航按钮，人脸库操作始终留在右上角。 -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="60dp"
+        android:gravity="center_vertical" android:paddingStart="10dp" android:paddingEnd="16dp">
+        <androidx.appcompat.widget.AppCompatImageButton android:id="@+id/backButton"
+            style="@style/Widget.HiFace.NavigationButton.OnLight" android:contentDescription="@string/cd_back" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:layout_marginStart="8dp" android:fontFamily="sans-serif-medium"
+            android:text="@string/image_search_title" android:textSize="17sp" android:textColor="@color/content_text" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/imageSearchLibrary"
+            style="@style/Widget.AppCompat.Button.Borderless" android:layout_width="wrap_content"
+            android:layout_height="44dp" android:minWidth="72dp" android:minHeight="0dp"
+            android:paddingStart="12dp" android:paddingEnd="12dp" android:background="@drawable/bg_image_search_secondary"
+            android:text="@string/search_manage" android:textAllCaps="false"
+            android:textSize="14sp" android:textColor="@color/content_accent" app:backgroundTint="@null" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:orientation="vertical" android:paddingStart="20dp" android:paddingEnd="20dp" android:paddingBottom="16dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingTop="8dp" android:paddingBottom="14dp" android:text="@string/image_search_guide"
+            android:textSize="12sp" android:textColor="@color/content_text_secondary" />
+        <FrameLayout android:id="@+id/imageSearchPhoto" android:layout_width="match_parent"
+            android:layout_height="0dp" android:layout_weight="1" android:background="@drawable/bg_image_search_card">
+            <TextView android:id="@+id/imageSearchPlaceholder" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:layout_gravity="center"
+                android:gravity="center" android:drawablePadding="12dp" android:text="@string/face_compare_select_photo"
+                android:textSize="14sp" android:textColor="@color/content_text_secondary"
+                android:importantForAccessibility="no" app:drawableTopCompat="@drawable/ic_compare_photo" />
+            <ProgressBar android:id="@+id/imageSearchLoading" android:layout_width="32dp"
+                android:layout_height="32dp" android:layout_gravity="center"
+                android:indeterminateTint="@color/content_accent" android:visibility="gone" />
+        </FrameLayout>
+        <HorizontalScrollView android:id="@+id/imageSearchStrip" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="12dp"
+            android:scrollbars="none" android:visibility="gone">
+            <LinearLayout android:id="@+id/imageSearchCrops" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:orientation="horizontal" />
+        </HorizontalScrollView>
+        <TextView android:id="@+id/imageSearchStatus" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:minHeight="48dp" android:gravity="center"
+            android:paddingTop="10dp" android:paddingBottom="10dp" android:accessibilityLiveRegion="polite"
+            android:text="@string/image_search_prompt" android:textSize="13sp" android:textColor="@color/content_text_secondary" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/imageSearchAlbum"
+            style="@style/Widget.AppCompat.Button.Borderless" android:layout_width="match_parent"
+            android:layout_height="56dp" android:background="@drawable/bg_face_compare_primary"
+            android:fontFamily="sans-serif-medium" android:text="@string/image_search_album"
+            android:textAllCaps="false" android:textSize="17sp" android:textColor="@android:color/white"
+            app:backgroundTint="@null" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,15 @@
+# Keep distributable SDK/runtime binaries and large search fixtures in Git LFS.
+*.a filter=lfs diff=lfs merge=lfs -text
+*.aar filter=lfs diff=lfs merge=lfs -text
+*.bphfm filter=lfs diff=lfs merge=lfs -text
+*.dll filter=lfs diff=lfs merge=lfs -text
+*.dylib filter=lfs diff=lfs merge=lfs -text
+*.exe filter=lfs diff=lfs merge=lfs -text
+*.har filter=lfs diff=lfs merge=lfs -text
+*.jar filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.so.* filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+**/features_10000.json filter=lfs diff=lfs merge=lfs -text
+platforms/iOS/SDK/HiFaceNative.xcframework/**/HiFaceNative filter=lfs diff=lfs merge=lfs -text
+platforms/Linux/runtimes/**/bin/hiface_desktop filter=lfs diff=lfs merge=lfs -text
