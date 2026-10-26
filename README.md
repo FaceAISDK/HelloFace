@@ -19,6 +19,25 @@ Android, iOS, Harmony, Windows, and Linux SDKs and Demos are updated to 0.7.0.
 | Windows | Windows 10/11 x64 · CPU | [Demo](platforms/Windows/README.md) · [SDK](platforms/Windows/sdk/README.md) |
 | Web Face Enrollment | Browser | [Try online](https://hiface-mdp.pages.dev/face/) |
 
+## Clone the Demos and SDKs
+
+This repository stores the runtime binaries with Git LFS. Install Git LFS before cloning so the checkout contains the actual SDK and Demo binaries instead of pointer files:
+
+```bash
+git lfs install
+git clone --branch 0.7.0 --depth 1 https://github.com/FaceSDKPro/HelloFace.git
+cd HelloFace
+```
+
+If the repository was cloned before Git LFS was installed, fetch the binaries with:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+Then open the [Android](platforms/Android/README.md), [iOS](platforms/iOS/README.md), [Harmony](platforms/Harmony/README.md), [Linux](platforms/Linux/README.md), or [Windows](platforms/Windows/README.md) Demo guide. GitHub's Release source archives are also configured to include the actual Git LFS objects.
+
 **More platforms (planned):** WeChat Mini Programs, Chrome, uni-app, Flutter plugins, React Native (RN) plugins, and more.
 
 - The SDK is in iterative public Beta testing. Please keep the SDK version up to date.

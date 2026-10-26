@@ -19,6 +19,25 @@ Android、iOS、Harmony、Windows 和 Linux SDK 与 Demo 统一更新至 0.7.0�
 | Windows | Windows 10/11 x64 · CPU | [Demo](platforms/Windows/README.zh-CN.md) · [SDK](platforms/Windows/sdk/README.zh-CN.md) |
 | Web 人脸录入 | 浏览器 | [在线体验](https://hiface-mdp.pages.dev/face/) |
 
+## 克隆 Demo 与 SDK
+
+本仓库使用 Git LFS 保存运行所需的二进制。请先安装 Git LFS 再克隆，确保工作区得到实际的 SDK 和 Demo 二进制，而不是 LFS 指针文件：
+
+```bash
+git lfs install
+git clone --branch 0.7.0 --depth 1 https://github.com/FaceSDKPro/HelloFace.git
+cd HelloFace
+```
+
+如果安装 Git LFS 前已经克隆仓库，请补充下载二进制：
+
+```bash
+git lfs install
+git lfs pull
+```
+
+然后按照 [Android](platforms/Android/README.zh-CN.md)、[iOS](platforms/iOS/README.zh-CN.md)、[Harmony](platforms/Harmony/README.zh-CN.md)、[Linux](platforms/Linux/README.zh-CN.md) 或 [Windows](platforms/Windows/README.zh-CN.md) 的 Demo 说明运行。GitHub Release 自动生成的源码归档也已配置为包含实际 Git LFS 对象。
+
 **更多平台（计划）：** 将支持微信小程序、Chrome、uni-app、Flutter 插件、React Native（RN）插件等。
 
 - SDK正在Beta 迭代公测中，请及时升级SDK版本。
