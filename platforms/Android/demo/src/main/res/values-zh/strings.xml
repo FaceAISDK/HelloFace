@@ -18,7 +18,7 @@
     <string name="api_title">HelloFace SDK</string>
     <string name="api_subtitle">离线｜数据安全｜高效</string>
     <string name="device_info_copied">已复制</string>
-    <string name="api_about">关于 HiFace SDK Demo</string>
+    <string name="api_about">关于 HelloFace SDK %1$s</string>
     <string name="api_about_message">更新以及更多说明：https://github.com/FaceSDKPro/</string>
     <string name="feature_face_detection">实时人脸检测</string>
     <string name="feature_face_detection_desc">查看人脸框、关键点、轮廓和头姿</string>

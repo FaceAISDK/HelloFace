@@ -6,6 +6,11 @@ import os
 struct DemoHomeView: View {
     @State private var showsAbout = false
 
+    private var aboutTitle: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        return DemoL10n.text("关于 HelloFace SDK {0}", [version])
+    }
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -24,7 +29,7 @@ struct DemoHomeView: View {
                                 .frame(width: 44, height: 44)
                                 .background(.white.opacity(0.15), in: Circle())
                         }
-                        .accessibilityLabel(DemoL10n.text("关于 HiFace SDK Demo"))
+                        .accessibilityLabel(aboutTitle)
                     }
                     Text(DemoDeviceInfo.copyText)
                         .font(.caption)
@@ -58,7 +63,7 @@ struct DemoHomeView: View {
                         }
                     }
                     .buttonStyle(HomeFeatureButtonStyle())
-                    Button(DemoL10n.text("关于 HiFace SDK Demo")) { showsAbout = true }
+                    Button(aboutTitle) { showsAbout = true }
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.75))
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -74,7 +79,7 @@ struct DemoHomeView: View {
             .navigationBarHidden(true)
             .demoDialog(isPresented: showsAbout, onDismiss: { showsAbout = false }) {
                 CameraDialogTitle(
-                    title: DemoL10n.text("关于 HiFace SDK Demo"),
+                    title: aboutTitle,
                     subtitle: DemoL10n.text("更新以及更多说明：https://github.com/FaceSDKPro/"),
                     symbol: "info.circle"
                 )

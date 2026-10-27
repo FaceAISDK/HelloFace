@@ -1,9 +1,9 @@
 {
-  "version": "0.7.0",
+  "version": "0.8.0",
   "channel": "Beta",
   "architecture": "x86_64",
   "glibc_baseline": "2.35",
-  "cxx_runtime": "bundled libc++",
+  "cxx_runtime": "statically linked libc++/libc++abi/libunwind",
   "feature_space_id": "jdx-feature-v1",
   "protected_resources": "built-in"
 }

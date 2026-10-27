@@ -65,7 +65,7 @@ cmake --build build --config Release
 重新编译 EXE 或替换 DLL 后，使用 `tools/sign_product.py` 更新匹配的 `.hfpackage`；发布密钥保留在构建端。示例：
 
 ```powershell
-python tools/sign_product.py --platform windows --root . --entry bin/hiface_demo.exe --sdk bin/hiface.dll --private-key C:/secure/publisher.pem --product-id com.hiface.demo --version 0.7.0 --replace
+python tools/sign_product.py --platform windows --root . --entry bin/hiface_demo.exe --sdk bin/hiface.dll --private-key C:/secure/publisher.pem --product-id com.hiface.demo --version 0.8.0 --replace
 ```
 
 CLI 使用自己的 `bin/hiface_cli.exe.hfpackage`，并采用相同产品和发布密钥。SDK 的固定版本、头文件、导入库与 DLL 须匹配。HF1 与人脸数据库未加密，导出反馈前移除个人数据和本机路径。

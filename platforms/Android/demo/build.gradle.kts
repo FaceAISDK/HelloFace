@@ -15,12 +15,16 @@ android {
     namespace = "com.hiface.sdk.demo"
     compileSdk = libs.versions.compileSdk.get().toInt()
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.hiface.sdk.public"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 7000
-        versionName = "0.7.0"
+        versionCode = 8000
+        versionName = "0.8.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -91,7 +95,7 @@ android {
 }
 
 dependencies {
-    implementation("io.github.facesdkpro:hiface-android:0.7.0")
+    implementation("io.github.facesdkpro:hiface-android:0.8.0")
 
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity)

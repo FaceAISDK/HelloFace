@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.0] - Preparation, not published
+
+- Changed the authorization-state persistence checkpoint to 10 seconds while retaining per-use and output-boundary validation.
+- Aligned the five SDK and Demo identities; binary, device and full public-tree acceptance remain pending for this candidate.
+
 ## [0.7.0] - Preparation, not published
 
 - Aligned SDK and Demo release identities while preserving direct SDK ownership and lifecycle cleanup.

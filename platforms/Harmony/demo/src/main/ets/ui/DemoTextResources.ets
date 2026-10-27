@@ -104,7 +104,7 @@ export const DEMO_TEXT_RESOURCES: Record<string, DemoTextResource> = {
   "共 {0} 条人脸记录": { name: "demo_cf45625df1c3", english: "{0} face records" },
   "关": { name: "demo_5d0ae622f61f", english: "off" },
   "关于": { name: "demo_52d25a9e30ba", english: "About" },
-  "关于 HiFace SDK Demo": { name: "demo_07744edec8d4", english: "About HiFace Demo" },
+  "关于 HelloFace SDK {0}": { name: "demo_c39139324b48", english: "About HelloFace SDK {0}" },
   "关闭": { name: "demo_3fd47edce45b", english: "Close" },
   "其他动作": { name: "demo_aee8644e08e8", english: "Other action" },
   "再试一次": { name: "demo_4cc167a8c40b", english: "Try again" },

@@ -10,7 +10,7 @@ import { FaceImageSearchDemo } from '../search/FaceImageSearchDemo';
 import { StaticFaceComparisonDemo } from '../comparison/StaticFaceComparisonDemo';
 import { FaceSearchLibraryDemo } from '../search/FaceSearchLibraryDemo';
 import { createDemoFaceSearchConfig } from '../search/DemoFaceSearchConfig';
-import { common } from '@kit.AbilityKit';
+import { bundleManager, common } from '@kit.AbilityKit';
 import { deviceInfo, pasteboard } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -29,6 +29,20 @@ enum DemoPage {
 @Entry
 @Component
 struct Index {
+  private readonly appVersion: string = this.readAppVersion();
+
+  private readAppVersion(): string {
+    try {
+      return bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT).versionName;
+    } catch {
+      return '—';
+    }
+  }
+
+  private aboutTitle(): string {
+    return DemoL10n.text("关于 HelloFace SDK {0}", [this.appVersion]);
+  }
+
   @State private activePage: DemoPage = DemoPage.HOME;
   @State private cameraPageKey: number = 0;
   @State private sdkState: string = DemoL10n.text("正在准备识别模型…");
@@ -304,7 +318,7 @@ struct Index {
           Button({ type: ButtonType.Normal }) {
             Image($r('app.media.ic_api_info')).width(20).height(20)
           }.width(40).height(40).borderRadius(20).backgroundColor(DemoTheme.surfaceOnDark)
-          .accessibilityText(DemoL10n.text("关于")).onClick(() => this.showAbout())
+          .accessibilityText(this.aboutTitle()).onClick(() => this.showAbout())
         }.width('100%')
         Text(this.deviceText).fontSize(10).fontColor(DemoTheme.textOnDarkSecondary)
           .width('100%').textAlign(TextAlign.End).padding({ right: 4 }).margin({ top: 11, bottom: 12 })
@@ -331,7 +345,7 @@ struct Index {
           DemoL10n.text("检测图片中的多个人脸并搜索人脸库"), (): void => this.navigate(DemoPage.IMAGE_SEARCH))
         this.FeatureCard($r('app.media.ic_search_settings'), DemoL10n.text("摄像头参数设置"),
           DemoL10n.text("设置分析分辨率与坐标镜像"), (): void => this.navigate(DemoPage.CAMERA_SETTINGS))
-        Text(DemoL10n.text("关于 HiFace SDK Demo")).height(42).fontSize(12).fontColor(DemoTheme.textOnDarkSecondary)
+        Text(this.aboutTitle()).height(42).fontSize(12).fontColor(DemoTheme.textOnDarkSecondary)
           .width('100%').textAlign(TextAlign.Center).margin({ top: 3 })
           .onClick(() => this.showAbout())
       }.padding({ left: 20, right: 20, top: 16, bottom: 20 }).width('100%')

@@ -9,6 +9,29 @@ import XCTest
 /// Run inside the real Demo App against the binary SDK; exercise model resources and HF1 storage without a camera.
 /// 在真实 Demo App 内针对二进制 SDK 运行，无需相机即可验证模型资源与 HF1 存储。
 final class ModelResourceTests: XCTestCase {
+    private func requireDeviceRuntime() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("The simulator SDK is compile/link-only; native runtime acceptance requires a physical iOS device")
+        #endif
+    }
+
+    @MainActor
+    func testSimulatorStubReportsUnavailableWithoutPretendingToRunModels() async throws {
+        #if targetEnvironment(simulator)
+        let sdk = HiFaceSDK()
+        defer { sdk.close() }
+        switch try await extractBlankImageFeature(sdk) {
+        case .failure(let error):
+            XCTAssertEqual(error.code, .modelLoadFailed)
+            XCTAssertTrue(error.message.contains("iOS Simulator"))
+        case .success:
+            XCTFail("The simulator stub must not claim successful native inference")
+        }
+        #else
+        throw XCTSkip("Simulator-only contract; device runtime is covered by the native tests")
+        #endif
+    }
+
     @MainActor
     func testImageSearchPreservesOriginalResolutionAndOddPixelCrop() async throws {
         for (width, height) in [(4032, 3024), (3024, 4032), (4096, 1024), (2049, 1025), (100, 100)] {
@@ -64,6 +87,7 @@ final class ModelResourceTests: XCTestCase {
 
     @MainActor
     func testImageFacesReturnEmptyOnBlankPhoto() async throws {
+        try requireDeviceRuntime()
         let sdk = HiFaceSDK()
         defer { sdk.close() }
         let image = try HiFaceRGBAImage(rgba: Data(repeating: 128, count: 332 * 332 * 4), width: 332, height: 332)
@@ -73,6 +97,7 @@ final class ModelResourceTests: XCTestCase {
 
     @MainActor
     func testQ7DatabasePreservesHF1ScoresAndReopens() async throws {
+        try requireDeviceRuntime()
         let resource = try XCTUnwrap(Bundle.main.url(forResource: "features_10000", withExtension: "json"))
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: resource)) as? [String: Any])
         let records = try XCTUnwrap(manifest["entries"] as? [[String: Any]])
@@ -139,6 +164,7 @@ final class ModelResourceTests: XCTestCase {
 
     @MainActor
     func testDemoLoadsFrameworkModelsWithoutAnAppModelDirectory() async throws {
+        try requireDeviceRuntime()
         let appModels = try XCTUnwrap(Bundle.main.resourceURL)
             .appendingPathComponent("HiFaceModels", isDirectory: true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: appModels.path),
@@ -157,6 +183,7 @@ final class ModelResourceTests: XCTestCase {
 
     @MainActor
     func testAnExplicitMissingModelDirectoryReportsModelLoadFailure() async throws {
+        try requireDeviceRuntime()
         let missingModels = try XCTUnwrap(Bundle.main.resourceURL)
             .appendingPathComponent("MissingHiFaceModels", isDirectory: true)
         let sdk = HiFaceSDK(configuration: HiFaceConfiguration(modelDirectoryURL: missingModels))

@@ -75,6 +75,9 @@ public final class DemoHomeActivity extends AppCompatActivity {
                 com.hiface.sdk.demo.search.FaceImageSearchActivity.class);
         bindFeatureCard(R.id.featureCameraSettings, android.R.drawable.ic_menu_manage,
                 R.string.feature_camera_settings, R.string.feature_camera_settings_desc, CameraSettingsActivity.class);
+        String aboutTitle = getString(R.string.api_about, BuildConfig.VERSION_NAME);
+        ((TextView) findViewById(R.id.aboutText)).setText(aboutTitle);
+        findViewById(R.id.aboutButton).setContentDescription(aboutTitle);
         View.OnClickListener showAbout = ignored -> Toast.makeText(
                 getApplicationContext(), R.string.api_about_message, Toast.LENGTH_SHORT).show();
         findViewById(R.id.aboutButton).setOnClickListener(showAbout);

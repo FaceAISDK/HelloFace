@@ -1,11 +1,11 @@
-# HiFace iOS SDK 0.7.0
+# HiFace iOS SDK 0.8.0
 
 English | [简体中文](README.zh-CN.md)
 
-Add the binary Swift package from https://github.com/FaceAISDK/HiFace-iOS at version `0.7.0`. For a local delivery, add this directory as a local package. Select the `HiFace` product and retain both HiFace and HiFaceNative targets.
+Requires iOS 15+ and Swift 6. Add this directory as a local Swift Package and select `HiFace`. Retain both HiFace and HiFaceNative binary targets.
 
 **Model scope: The current model does not support face recognition for people under 12 and must not be used in financial scenarios.**
 
-Use `HiFaceSDK()` with its default model bundle. Search configuration starts with `FaceSearchSessionConfiguration.default`. See [API](API.md) for supported calls and behavior.
+Initialize with `HiFaceSDK()` and its default model bundle. Add `NSCameraUsageDescription` to your App Info.plist. See the [API guide](API.md) for frames, flows and lifecycle.
 
-Requires iOS 15+ and Swift 6. Validate camera flows on iPhone. The SDK is in iterative public Beta testing. Please keep the SDK version up to date.
+The SDK is in iterative public Beta testing. Please keep the SDK version up to date.

@@ -53,8 +53,9 @@ extern "C" {
 #  pragma pack(push, 8)
 #endif
 
-/* 完全离线授权首发接口。仅本段授权接口尚未发布；业务 ABI 保持冻结。
- * 平台适配器由 SDK 实现，回调同步、无异常、不可重入；配置后存活至进程结束。
+/* 0.8.0 起冻结的平台 SDK 授权集成 ABI；普通客户应使用各平台托管 API。
+ * 平台适配器由 SDK 实现，宿主应用不得注入身份或存储回调。回调同步、无异常、
+ * 不可重入；配置后存活至进程结束。
  */
 typedef struct HiFaceLicenseIdentityV1 {
     uint32_t struct_size;

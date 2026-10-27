@@ -18,7 +18,7 @@
     <string name="api_title">HelloFace SDK</string>
     <string name="api_subtitle">Offline | Private | Fast</string>
     <string name="device_info_copied">Copied</string>
-    <string name="api_about">About HiFace Demo</string>
+    <string name="api_about">About HelloFace SDK %1$s</string>
     <string name="api_about_message">Updates and details: https://github.com/FaceSDKPro/</string>
     <string name="feature_face_detection">Live Detection</string>
     <string name="feature_face_detection_desc">View face boxes, landmarks, contours and pose</string>

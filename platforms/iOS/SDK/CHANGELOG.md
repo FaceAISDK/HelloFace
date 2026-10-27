@@ -2,6 +2,11 @@
 
 发布状态以对应 SPM tag 和 GitHub Release 为准；本文件记录准备交付的版本内容。
 
+## 0.8.0 — Preparation, not published
+
+- 将授权状态持久化检查周期统一为 10 秒，同时继续在每次能力调用和输出边界校验时间、代次与能力范围。
+- 同步五平台 SDK 与 Demo 版本；二进制、真机和完整公开树验收仍须绑定本次候选。
+
 ## 0.7.0 — Preparation, not published
 
 - 同步 SDK 与 Demo 版本，保持精简的直接接入方式。

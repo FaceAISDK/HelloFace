@@ -8,6 +8,15 @@ namespace {
 constexpr uint32_t background = 0xf5f5f7, surface = 0xffffff, ink = 0x242029, muted = 0x69636f, border = 0xe1e5eb;
 constexpr uint32_t accent = 0x077a63, tint = 0xe6f4ef, danger = 0xb33d37, dark = 0x172233;
 constexpr uint32_t technology_green = 0x00f5a0;
+std::string aboutTitle() {
+    const char* locale = nullptr;
+    for (const char* name : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
+        locale = std::getenv(name);
+        if (locale && *locale) break;
+    }
+    const bool chinese = locale && std::string(locale).rfind("zh", 0) == 0;
+    return std::string(chinese ? "关于 HelloFace SDK " : "About HelloFace SDK ") + HIFACE_DEMO_SDK_VERSION;
+}
 bool cameraSetting(const std::string& key) { return key.rfind("camera_", 0) == 0 || key == "mirror"; }
 bool settingsPage(const std::string& page) { return page == "settings" || page == "camera-settings"; }
 Rect fitImage(Rect frame, int width, int height) {
@@ -161,10 +170,10 @@ void DemoUi::home(const ViewState& s, Rect b) {
     const int columns = b.w < 800 ? 2 : 3, gap = 14, count = int(sizeof(demo_pages) / sizeof(demo_pages[0]));
     const int rows = (count + columns - 1) / columns;
     const int w = (b.w - 56 - (columns - 1) * gap) / columns;
-    const int h = std::clamp((b.h - 196 - (rows - 1) * gap) / rows, 96, 150);
-    home_max_scroll_ = std::max(0, 112 + rows * h + (rows - 1) * gap - (b.h - 84));
+    const int h = std::clamp((b.h - 236 - (rows - 1) * gap) / rows, 96, 150);
+    home_max_scroll_ = std::max(0, 112 + rows * h + (rows - 1) * gap - (b.h - 124));
     home_scroll_ = std::clamp(home_scroll_, 0, home_max_scroll_);
-    const auto old_clip = scene_.clip; scene_.clip = {0, 100, b.w, b.h - 176};
+    const auto old_clip = scene_.clip; scene_.clip = {0, 100, b.w, b.h - 216};
     for (int i = 0; i < count; ++i) {
         const auto& feature = demo_pages[i];
         const Rect r{28 + (i % columns) * (w + gap), 112 + (i / columns) * (h + gap) - home_scroll_, w, h};
@@ -173,6 +182,7 @@ void DemoUi::home(const ViewState& s, Rect b) {
         wrap(r.x + 14, r.y + 55, feature.description, muted, w - 28, h > 100 ? 3 : 2, Font::Small);
     }
     scene_.clip = old_clip;
+    button({28, b.h - 100, b.w - 198, 34}, aboutTitle(), "about", 0);
     if (home_max_scroll_) text(28, b.h - 60, "Scroll or use Page Up / Page Down for more features", muted, b.w - 190, Font::Small);
     text(28, b.h - 28, notice_.empty() ? s.ready ? "SDK ready | Open a feature to begin" : s.status : notice_,
          s.failed ? danger : muted, b.w - 190, Font::Small);
@@ -551,6 +561,7 @@ void DemoUi::browse(const std::string& target) {
     readDirectory(); focused_ = "browser-path"; keyboard_focus_ = "field:browser-path"; cursor_ = values_[focused_].size(); select_all_ = true;
 }
 void DemoUi::handle(const std::string& action, const ViewState& state) {
+    if (action == "about") { notice_ = "https://github.com/FaceSDKPro/"; return; }
     if (action == "camera-menu") { camera_menu_ = !camera_menu_; focused_.clear(); keyboard_focus_.clear(); return; }
     if (action.rfind("image-face:", 0) == 0) { selectImageFace(std::stoi(action.substr(11)), state); return; }
     if (action.rfind("image-faces-prev:", 0) == 0) { selectImageFace(std::max(0, image_face_offset_ - image_face_rows_), state); return; }

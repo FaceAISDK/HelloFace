@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-**SDK 0.0.4 Beta** · Linux x86_64 / ARM64 · CPU inference.
+**SDK 0.8.0 Beta** · Linux x86_64 / ARM64 · CPU inference.
 Ubuntu 22.04 / glibc 2.35 baseline; Ubuntu 24.04 compatibility target. X11 or Wayland with XWayland is needed for the desktop.
 **The SDK is in iterative public Beta testing. Please keep the SDK version up to date. The current model does not support face recognition for people under 12 and must not be used in financial scenarios.**
 Target-device desktop, fonts, USB camera and recognition acceptance remains pending; cross-builds are not device acceptance.

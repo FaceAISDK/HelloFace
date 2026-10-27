@@ -18,6 +18,10 @@
 
 namespace {
 using namespace hiface_demo;
+std::wstring aboutTitle() {
+    const bool chinese = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
+    return std::wstring(chinese ? L"关于 HelloFace SDK " : L"About HelloFace SDK ") + widen(HIFACE_DEMO_SDK_VERSION);
+}
 enum Control {
     Device = 100, RefreshDevices, Open, Close, Mode, Resolution, Rotation, Mirror, Apply, Logs, Help,
     PersonId, Group, Tag, FilterGroup, FilterTag, MaxFaces, Details, SearchMode, Silent, Threshold, Interval, Timeout,
@@ -237,7 +241,7 @@ void layout(Ui& ui) {
         const auto area = navigationItem(height, ui.main_left, kPageCount, i);
         move(NavBase + static_cast<int>(navigation_pages[i]), area.left, area.top, area.width(), area.height());
     }
-    move(Logs, width - 210, 22, 90); move(Help, width - 110, 22, 90);
+    move(Logs, width - 370, 22, 90); move(Help, width - 270, 22, 250);
     const bool home = ui.page == Page::Home;
     const bool camera_settings = ui.page == Page::CameraSettings;
     for (int i = 0; i < kFeatureCount; ++i) ShowWindow(child(window, HomeBase + i), home ? SW_SHOW : SW_HIDE);
@@ -435,7 +439,7 @@ void paint(Ui& ui) {
     label(dc, L"HiFace", rect(26, 22, 132, 34), ui.theme.title, colors::primary);
     label(dc, L"WINDOWS DEMO", rect(27, 56, 136, 20), ui.theme.small, colors::muted);
     const int logical_width = MulDiv(client.right, 96, ui.theme.dpi);
-    label(dc, page_info[static_cast<int>(ui.page)].title, rect(ui.main_left + 8, 18, std::max(1, logical_width - ui.main_left - 228), 38), ui.theme.title, colors::ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    label(dc, page_info[static_cast<int>(ui.page)].title, rect(ui.main_left + 8, 18, std::max(1, logical_width - ui.main_left - 388), 38), ui.theme.title, colors::ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     label(dc, L"Windows x64 · CPU  /  SDK 功能体验", rect(ui.main_left + 10, 52, std::max(1, logical_width - ui.main_left - 30), 20), ui.theme.small, colors::muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (ui.page != Page::Home && ui.page != Page::CameraSettings) {
         card(dc, ui.parameters, colors::surface, colors::line, px(14));
@@ -568,7 +572,7 @@ void create(Ui& ui) {
     for (int i = 0; i < kPageCount; ++i) button(ui, NavBase + i, page_info[i].title);
     for (int i = 0; i < kFeatureCount; ++i) button(ui, HomeBase + i, page_info[static_cast<int>(feature_pages[i])].title);
     button(ui, Primary, L"开始");
-    combo(ui, Device, {}); button(ui, RefreshDevices, L"刷新"); button(ui, Open, L"打开摄像头"); button(ui, Close, L"关闭摄像头"); button(ui, Logs, L"打开日志"); button(ui, Help, L"使用说明");
+    combo(ui, Device, {}); button(ui, RefreshDevices, L"刷新"); button(ui, Open, L"打开摄像头"); button(ui, Close, L"关闭摄像头"); button(ui, Logs, L"打开日志"); button(ui, Help, aboutTitle().c_str());
     combo(ui, Resolution, {L"640×480", L"1280×720", L"1920×1080"}); combo(ui, Rotation, {L"旋转 0°", L"旋转 90°", L"旋转 180°", L"旋转 270°"});
     control(ui, L"BUTTON", L"镜像预览", Mirror, BS_AUTOCHECKBOX | WS_TABSTOP); button(ui, Apply, L"应用参数");
     field(ui, PersonId, L"人员 ID", L"person-001"); field(ui, Group, L"分组", L""); field(ui, Tag, L"标签", L"");
@@ -680,7 +684,7 @@ void action(Ui& ui, int id, int notification) {
             L"分辨率为协商目标；镜像只影响显示。应用参数后保存分辨率、旋转和镜像，重启仍可使用。\n"
             L"相机设置只预览，不执行人脸分析；切换独立页面会关闭相机并取消当前流程。\n\n"
             L"数据与日志：%LOCALAPPDATA%\\HiFaceDemo\n"
-            L"Windows 10/11 x64、CPU 开发候选版；真人识别和摄像头兼容性需要真机确认。", L"HiFace Windows", MB_OK); break;
+            L"Windows 10/11 x64、CPU 开发候选版；真人识别和摄像头兼容性需要真机确认。", aboutTitle().c_str(), MB_OK); break;
         case StartFlow:
             if (ui.page == Page::Reference && ui.app.current()->has_reference && MessageBoxW(window, L"本次成功采集后将替换当前 1:1 基准，继续？", L"替换基准", MB_YESNO | MB_ICONQUESTION) != IDYES) break;
             ++ui.app.generation; submit(ui, Action::StartFlow); break;

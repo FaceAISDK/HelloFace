@@ -3,7 +3,7 @@
   "component": {
     "group": "io.github.facesdkpro",
     "module": "hiface-android",
-    "version": "0.7.0",
+    "version": "0.8.0",
     "attributes": {
       "org.gradle.status": "release"
     }
@@ -40,13 +40,13 @@
       ],
       "files": [
         {
-          "name": "hiface-android-0.7.0.aar",
-          "url": "hiface-android-0.7.0.aar",
-          "size": 10383153,
-          "sha512": "968a0a82938c8873a18e7a3f19dc9c4bd9eb44e76074502b535ade2b1dc56e5b6c4c413aca34336d51d55efeed9b93f6d35025f08bb0d0c484064fc8eb1c7811",
-          "sha256": "d8d3f831ac8663f4fa0881a3763c07ef9912df1b81f13e9dcf2b14e52f4548f4",
-          "sha1": "f5b0b6dcdf6984c9e50167e900d8602605649aaf",
-          "md5": "a2d05044caa69c576aa47c3a8518e8f6"
+          "name": "hiface-android-0.8.0.aar",
+          "url": "hiface-android-0.8.0.aar",
+          "size": 10377791,
+          "sha512": "971601b7d56bda0e6d7303a8ca689579cc8b622e254350bd1d24a0109056b4f49784f3bbe198b3c3edb177f30dc173931edeccf4a92ba4f8ee31c5b47433b1e9",
+          "sha256": "bc1b5507689ad74ee2ead869415b3863e1f1117743e2aa0dafeab840004d6a85",
+          "sha1": "fcb218f5af55dea1d320abd3c789b68cd478f85b",
+          "md5": "458b915465ba7141e5101424a1621748"
         }
       ]
     },
@@ -76,13 +76,13 @@
       ],
       "files": [
         {
-          "name": "hiface-android-0.7.0.aar",
-          "url": "hiface-android-0.7.0.aar",
-          "size": 10383153,
-          "sha512": "968a0a82938c8873a18e7a3f19dc9c4bd9eb44e76074502b535ade2b1dc56e5b6c4c413aca34336d51d55efeed9b93f6d35025f08bb0d0c484064fc8eb1c7811",
-          "sha256": "d8d3f831ac8663f4fa0881a3763c07ef9912df1b81f13e9dcf2b14e52f4548f4",
-          "sha1": "f5b0b6dcdf6984c9e50167e900d8602605649aaf",
-          "md5": "a2d05044caa69c576aa47c3a8518e8f6"
+          "name": "hiface-android-0.8.0.aar",
+          "url": "hiface-android-0.8.0.aar",
+          "size": 10377791,
+          "sha512": "971601b7d56bda0e6d7303a8ca689579cc8b622e254350bd1d24a0109056b4f49784f3bbe198b3c3edb177f30dc173931edeccf4a92ba4f8ee31c5b47433b1e9",
+          "sha256": "bc1b5507689ad74ee2ead869415b3863e1f1117743e2aa0dafeab840004d6a85",
+          "sha1": "fcb218f5af55dea1d320abd3c789b68cd478f85b",
+          "md5": "458b915465ba7141e5101424a1621748"
         }
       ]
     }
