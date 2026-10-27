@@ -21,6 +21,14 @@ Android、iOS、Harmony、Windows 和 Linux SDK 与 Demo 统一更新至 0.8.0�
 
 **更多平台（计划）：** 将支持微信小程序、Chrome、uni-app、Flutter 插件、React Native（RN）插件等。
 
+## 获取代码
+
+本仓库使用 Git LFS 管理 SDK 二进制等大文件，若只需默认分支的最新提交，建议使用浅克隆以跳过历史提交：
+
+```bash
+git clone --depth 1 --single-branch https://github.com/FaceSDKPro/HelloFace.git
+```
+
 - SDK正在Beta 迭代公测中，请及时升级SDK版本。
 - 当前模型不支持12周岁以下儿童人脸识别，不能用于金融相关场景。
 - 人脸搜索识别要求摄像头成像清晰；室外环境下，摄像头宽动态范围须大于 100 dB。

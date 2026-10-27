@@ -21,6 +21,14 @@ Android, iOS, Harmony, Windows, and Linux SDKs and Demos are updated to 0.8.0.
 
 **More platforms (planned):** WeChat Mini Programs, Chrome, uni-app, Flutter plugins, React Native (RN) plugins, and more.
 
+## Get the code
+
+This repository uses Git LFS to manage large files such as SDK binaries. If you only need the latest commit from the default branch, use a shallow clone to skip the commit history:
+
+```bash
+git clone --depth 1 --single-branch https://github.com/FaceSDKPro/HelloFace.git
+```
+
 - The SDK is in iterative public Beta testing. Please keep the SDK version up to date.
 - The current model does not support face recognition for people under 12 and must not be used in financial scenarios.
 - Face search requires clear camera images; outdoor deployments require a camera with a wide dynamic range greater than 100 dB.
