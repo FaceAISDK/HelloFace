@@ -107,7 +107,7 @@ void ImageSearchView::paint() {
     const auto layout = geometry();
     RECT title{px(14), px(6), client.right - px(14), px(30)};
     const auto hint = busy_ ? L"正在搜索…  可取消，或直接选择其他图片" : result_ && !result_->faces.empty()
-        ? L"点击人脸 / 缩略图选择 · ← → 切换 · 结果文字可复制" : L"Ctrl+O 选择图片 · F5 重新搜索 · Esc 取消";
+        ? L"点击人脸 / 缩略图选择 · ← → 切换 · 结果文字可复制" : L"Ctrl+O 选择图片 · F5 重新搜索 · Esc 返回";
     label(dc, hint, title, theme_->small, RGB(180, 195, 216), DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     std::wstring source = filename_.empty() ? L"JPEG / PNG / BMP / TIFF · 最多 10 张脸" : filename_;
     if (photo_) source += L"  ·  " + std::to_wstring(photo_->width) + L" × " + std::to_wstring(photo_->height);

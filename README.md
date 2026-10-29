@@ -2,9 +2,9 @@
 
 English | [中文](README.zh-CN.md)
 
-**0.8.0 Beta**
+**0.8.1 Beta**
 
-Android, iOS, Harmony, Windows, and Linux SDKs and Demos are updated to 0.8.0.
+Android, iOS, Harmony, Windows, and Linux SDKs and Demos are updated to 0.8.1.
 
 ### Offline face detection, capture, liveness, 1:1 verification and 1:N/M:N search.
 

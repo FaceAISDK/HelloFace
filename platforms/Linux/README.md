@@ -52,6 +52,8 @@ YUYV/MJPEG/NV12/NV21 (packed in one buffer plane),
 requesting 640×360 at 25 FPS by default; the driver negotiates actual parameters.
 Set `HIFACE_CAMERA_ROTATE=left` (aliases: `ccw`, `90ccw`) to turn a landscape sensor frame into
 360×640 before both rendering and face analysis. Use `right` (aliases: `cw`, `90cw`) for the opposite direction.
+Open **SDK Settings**, select a clockwise **UI rotation** (0°, 90°, 180° or 270°); the choice saves automatically. The complete interface, camera preview, face boxes and landmarks rotate together; mouse/touch coordinates follow the same transform. The angle is saved in `settings.conf` and restored on restart. Existing `HIFACE_DISPLAY_ROTATE` aliases remain startup defaults when no angle is saved; numeric `0`, `90`, `180` and `270` are also supported. Runtime rotation requires `libXrender.so.1`.
+
 Set `HIFACE_DISPLAY_ROTATE=left` to rotate the entire portrait interface and input mapping inside the HiFace window.
 Keep the Xorg output at `normal`; combining it with `xrandr --rotate` can trigger DRM `flip timeout` failures.
 
@@ -71,34 +73,53 @@ Check device permissions instead of running the Demo as root. After joining the 
 
 ## Desktop workflows
 
-Startup opens Home, with the first eight cards in Android order and 11 independent feature pages in total. Short portrait windows support wheel and Page Up/Down scrolling. Detection, enrollment, verification, liveness, continuous search, photo comparison, image search, settings, face library and guided capture each have their own page. Opening a camera feature connects the selected device; press Start to run that page's workflow. Home, photo and library pages close the camera. No camera is opened on startup.
+Live Detection draws only the detector's five landmarks and selected lip, eye, face-outline and nose contours. Connections and the 1.4x eye-contour scale match Android. Eyebrows, the dense 468-point cloud, face boxes, confidence and pose labels are hidden. Camera search and image search retain their own identity boxes and result labels.
+
+Home follows Android with eight vertically ordered feature cards: detection, capture, verification, liveness, face search, photo comparison, image search and SDK Settings. Enrollment and Face library open from Face Search; Image Search also opens Face library. Every page has a Back button at the top. Child pages return to the feature that opened them, and top-level features return Home. Scrolling uses the wheel or Page Up/Down. Opening a camera feature connects the selected device and automatically starts its workflow. Leaving closes the camera and cancels the current flow. No camera is opened on startup.
 
 | Page | Features |
 |---|---|
 | F1 Face search | Continuous 1:N/M:N; use Home for the other independent camera features |
 | F2 Photo comparison | Two-photo comparison with input previews; detection/reference/enrollment photos belong to their own feature pages |
-| F3 Face library | Paging, ID/group/tag filters, metadata edit, delete, reference selection, import/export |
-| F4 Settings | Face count, landmarks, ordered actions, verification/liveness, search and camera options |
+| F3 Face Capture | Capture a reference feature; search enrollment and library management stay inside Face Search |
+| F4 SDK Settings | Video format, FPS, mirror and UI rotation; feature parameters belong to their own Settings entry |
 | F5 Image search | Up to ten faces, independent status, Top-1 ID/score, aligned thumbnails and selectable boxes |
+
+Mouse operation: left-click feature cards, Back, buttons, switches and input fields; use the wheel to scroll Home and select photo-search results. Clicks do not require a preceding pointer-motion event, including after resizing or rotating the UI. Left-click also gives the window keyboard focus for text entry in embedded sessions without a window manager.
+
+Small embedded displays enable a built-in keyboard when a text field is clicked. It supports letters, digits, common symbols, case switching, Delete, Clear and Space using only a mouse or touch. Keyboard Done only hides the keyboard; use the page's save/confirm button to submit. Escape hides the keyboard before dismissing the form. Input follows UI rotation. Set `HIFACE_SOFT_KEYBOARD=1` to enable it on larger desktops, `0` to disable it, or `auto` for the default. Hardware keyboards remain supported; Chinese input requires system fonts and an XIM input method.
+
+The Demo supplies its own black-and-white arrow, without a cursor-theme/font dependency. `HIFACE_MOUSE_CURSOR=auto` (default) uses a software cursor on small/embedded displays and an X11 cursor on regular desktops. The software cursor remains visible inside the Demo even when the X server uses `-nocursor` or a hardware cursor is unavailable. Its hotspot stays aligned with clicks at all four UI rotations. Move outside the window to return to the desktop cursor.
+
+```sh
+# Force the embedded-friendly software cursor, or use system for a native X11 cursor.
+HIFACE_MOUSE_CURSOR=software ./run-demo.sh /dev/video0
+```
 
 Camera keys choose pages: D detection, C capture, L liveness, V verify, E enroll, S search, P pause/resume,
 X cancel, M mirror, N reconnect, Q quit. Text inputs support UTF-8, Tab/Shift+Tab, copy/paste and Enter submit.
-Esc stops a running camera flow, then returns Home; the camera Menu also links to Home. F1..F5 switch pages; dialogs retain focus. Settings preserve drafts and focus invalid fields.
-Choose a captured/photo/library reference before verification. Library references keep original HF1 text.
-Enrollment rejects existing IDs; batch replacement and deletion require confirmation.
-Up to four actions can repeat; empty actions mean silent liveness. Verification enables silent liveness by default.
+Back returns to the previous page, cancelling an active photo search or confirming that an import should stop first. Esc closes a dialog/input/menu before returning. F1..F5 switch primary features; dialogs retain focus. Settings preserve drafts and ask before discarding changes. Camera Menu contains only device and current-feature options.
+Detection, liveness, verification and face search expose only their own feature settings. Face Capture requires preview confirmation and a Face ID, saves only its HF1 reference in a separate captured-ID store, and returns Home. Verification first selects a captured ID before opening its camera; an empty store asks the user to capture first. Choose Face ID changes that reference. Original HF1 text is retained without requantization. Returning from Face library to Image Search restores the existing photo and results.
+Search enrollment stages a preview and ID/group/tag. An existing ID requires a separate Replace confirmation; keeping it preserves the draft. Capture updates an existing reference ID like Android. Batch replacement and deletion require confirmation.
+Liveness defaults to three distinct random actions and verification to two; retries choose a fresh sequence. Each has independent settings. Custom sequences allow up to four actions, including repeats; empty actions mean silent liveness. Verification enables silent liveness by default. Action instructions remain visible until the step changes, with a countdown. Results and failures offer Retry and Close.
 1:N search can use silent liveness; M:N omits it. Spoof rejection takes priority over a matching ID/score.
 
 The full-screen search page captures and previews the newest frame at 25 FPS. Recognition consumes only the newest
 available frame on a separate worker and is capped at 8 FPS, so slow inference does not stall preview. The overlay
 reports actual Preview FPS, Recognition FPS and last inference time separately.
+Search publishes the current frame's geometry before database resolution. Pending, rejected/unknown and confirmed
+matches use gray, red and green overlays; liveness rejection overrides identity similarity. Overlays expire after
+1.2 seconds without a fresh analysis result, or 0.5 seconds without preview frames, and clear on camera reconnect.
+Pause stops recognition scheduling while preview stays live; resume consumes the newest frame. SDK-skipped frames
+do not count toward Recognition FPS. Preview snapshots share immutable overlays, and X11 batches adjacent frame
+edges, contour segments and landmark dots without changing their drawing order.
 Set `HIFACE_START_SEARCH=1` for an unattended kiosk/service deployment that should enter Face search and start the
 continuous search flow immediately after SDK initialization. The default remains the Home page with the camera closed.
 
 ## Photo search and demo data
 
 Browse or enter a photo path and press Enter. Each face retains its own matched, unmatched, small-face or error status.
-Click the photo box or result card; arrows, Home/End, Page Up/Down and the result pane's wheel select faces.
+Click the photo to choose another image. Result cards, arrows, Home/End, Page Up/Down and the result pane's wheel select faces.
 Changing images invalidates older requests; Esc cancels. Closing waits for the synchronous SDK call safely.
 Photo search is whole-library Top-1 at the shared default threshold 0.80 and does not perform liveness checks.
 JPEG EXIF orientation is normalized. Oversized JPEG/PNG/BMP images are scaled to 4096 then cropped to even dimensions;
@@ -157,7 +178,7 @@ a restart and does not change models, features, thresholds or liveness checks.
 `HIFACE_PERF_LOG=1` enables five-second preview/recognition/paint timing logs for diagnostics.
 
 Default data directory: `${XDG_DATA_HOME:-$HOME/.local/share}/hiface-demo`, overridden by `HIFACE_DATA_DIR`.
-It holds `hiface-search.db`, `reference.hf1`, settings and explicitly captured PPM images. Previews are not saved.
+It holds `hiface-search.db`, a separate `captured-faces.db`, the selected `reference.hf1` and settings. Guided previews are not saved as photos. Existing images saved by earlier versions remain untouched.
 SQLite/HF1 are unencrypted; applications own data protection and cleanup. The UI uses English labels;
 UTF-8 file paths/IDs depend on desktop fonts and input methods.
 
@@ -170,6 +191,7 @@ Review diagnostics before sharing them. Do not publish user photos, databases, r
 Model files are protected runtime assets, not training/source models. Keep SDK/runtime and Demo dependency notices.
 [SDK support](https://github.com/FaceSDKPro/HelloFace/issues).
 
-Camera settings has its own Home page and saves only camera fields. Detection, guided capture and enrollment accept a photo through their Menu; selecting it closes the live camera.
-Enrollment first captures a preview, then requires an ID and explicit confirmation. Duplicate IDs retain the editable draft; retake, cancellation or leaving discards it. Enrollment does not replace the verification reference.
+SDK Settings automatically saves resolution presets, mirror and UI rotation. Exact dimensions, FPS and video format are under Advanced video settings; manual edits use Apply typed values. These preferences do not change workflow settings. Detection, guided capture and enrollment accept a photo through their Menu; selecting it closes the live camera.
+Enrollment first captures a preview, then requires an ID and explicit confirmation. Duplicate search IDs require another replacement confirmation and retain the editable draft when declined; retake, cancellation or leaving discards it. Enrollment does not replace the verification reference.
+Photo comparison extracts and caches each photo when selected; Compare uses those features and shows only the similarity percentage. Face library uses full-width person cards with per-record Edit and Delete actions, a single exact-ID query, and 100-row batches appended while scrolling or dragging. Clearing a query restores the list; metadata dialogs support the on-screen keyboard and retry after errors. Its top-right Menu contains refresh, confirmed imports and HF1 exchange; Back from exchange returns to the list, and JSON export includes the full library. Portrait image search uses a large photo with a horizontal result strip.
 Pending enrollment pauses analysis. Page changes discard old images/search results, and changing the reference clears unrelated previews.

@@ -21,6 +21,22 @@ struct ViewState {
     uint64_t settings_attempt = 0, photo_search_generation = 0, preview_sequence = 0, visual_revision = 0;
     bool photo_search_busy = false, pending_enrollment = false;
     uint64_t enrollment_generation = 0;
+    char pending_capture_kind = 0, saved_capture_kind = 0;
+    uint64_t saved_capture_generation = 0, flow_result_generation = 0;
+    uint64_t enrollment_attempt = 0;
+    uint64_t metadata_attempt = 0, gallery_attempt = 0, gallery_revision = 0;
+    uint32_t gallery_next_offset = 0;
+    bool gallery_has_more = false;
+    std::string gallery_query_id;
+    bool flow_result_pending = false;
+    bool flow_result_can_retry = true;
+    std::string duplicate_enrollment_id, result_title;
+    std::vector<GalleryEntry> captured_faces;
+    bool comparison_first_ready = false, comparison_second_ready = false;
+    bool comparison_first_processing = false, comparison_second_processing = false;
+    std::string comparison_first_error, comparison_second_error;
+    std::optional<float> comparison_similarity;
+    int action_seconds_remaining = 0;
     std::shared_ptr<Image> search_photo;
     std::shared_ptr<const ImageSearchReport> photo_search;
     std::string search_photo_path;
@@ -34,6 +50,18 @@ struct ViewState {
     std::shared_ptr<CameraFrame> frame;
     std::shared_ptr<Image> image_first, image_second, aligned_preview;
     std::vector<Box> boxes;
+    // Live overlays are immutable and shared across preview-only snapshots.
+    // 实时叠加层不可变；仅更新预览时共享它，不反复复制轮廓和标签。
+    std::shared_ptr<const std::vector<Box>> camera_boxes;
+    int64_t overlay_frame_ms = 0;
+    uint64_t overlay_capture_generation = 0;
+    int overlay_preview_width = 0, overlay_preview_height = 0;
+    const std::vector<Box>& liveBoxes() const { return camera_boxes ? *camera_boxes : boxes; }
+    bool overlayFresh(int64_t now, int64_t preview_frame_ms, uint64_t generation, const CameraFrame* preview = nullptr) const {
+        return overlay_frame_ms > 0 && now >= overlay_frame_ms && now-overlay_frame_ms <= 1200 &&
+            now >= preview_frame_ms && now-preview_frame_ms <= 500 && overlay_capture_generation == generation &&
+            (!preview || (preview->width == overlay_preview_width && preview->height == overlay_preview_height));
+    }
     std::vector<GalleryEntry> gallery;
     std::vector<GalleryEntry> image_matches;
 };
@@ -60,7 +88,7 @@ private:
     };
     struct CaptureState {
         bool active = false, ready = false, dual_preview = false;
-        uint64_t sequence = 0, analysis_sequence = 0;
+        uint64_t sequence = 0, analysis_sequence = 0, generation = 0;
         int64_t last_frame_ms = 0, last_analysis_ms = 0;
         double fps = 0;
         std::string description = "Camera disconnected", error, lighting;
@@ -72,6 +100,7 @@ private:
     void run(const std::string& models, const std::string& database, std::string device, bool smoke, const std::string& assets);
     std::atomic<bool> stopping_{false};
     std::atomic<uint64_t> photo_generation_{0};
+    std::atomic<uint64_t> comparison_generations_[2]{};
     bool smoke_ = false;
     std::mutex mutex_;
     std::condition_variable capture_changed_;

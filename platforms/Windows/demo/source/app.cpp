@@ -66,6 +66,13 @@ void App::run() {
         std::string reference;
         EnrollmentDraft enrollment;
         std::shared_ptr<const Image> search_source;
+        struct SuspendedPhoto {
+            std::shared_ptr<const Image> source, photo;
+            std::shared_ptr<const ImageSearchResult> result;
+            std::filesystem::path file;
+            uint64_t generation = 0;
+        };
+        std::optional<SuspendedPhoto> suspended_photo;
         try { reference = readReference(reference_path); }
         catch (const std::exception& error) { writeLog(error.what()); state.error = true; state.update.message = error.what(); }
         state.has_reference = !reference.empty();
@@ -82,6 +89,10 @@ void App::run() {
             return *sdk;
         };
         auto apply = [&](const Settings& settings) {
+            const bool returning_to_photo = state.settings.page == Page::Gallery && settings.page == Page::ImageSearch;
+            if (state.settings.page == Page::ImageSearch && settings.page == Page::Gallery)
+                suspended_photo = SuspendedPhoto{search_source, state.search_photo, state.image_search, state.search_file, state.search_generation};
+            else if (state.settings.page != settings.page && !returning_to_photo) suspended_photo.reset();
             if (sdk) {
                 sdk->cancelEnrollment();
                 if (settings.page == Page::Search) sdk->configureSearch(settings.search);
@@ -99,6 +110,11 @@ void App::run() {
                 state.capture_fps = state.analysis_fps = state.inference_ms = 0;
             }
             state.settings = settings; state.flow_active = false; state.paused = false;
+            if (returning_to_photo && suspended_photo) {
+                search_source = std::move(suspended_photo->source); state.search_photo = std::move(suspended_photo->photo);
+                state.image_search = std::move(suspended_photo->result); state.search_file = std::move(suspended_photo->file);
+                state.search_generation = suspended_photo->generation; suspended_photo.reset();
+            }
             state.camera_open = bool(camera); state.offset = 0; refresh();
         };
         auto setReference = [&](const std::string& value, std::shared_ptr<const Image> preview = {}) {
@@ -125,12 +141,16 @@ void App::run() {
                 sdk->cancelEnrollment(); state.flow_active = false; state.update.message = u8"已取消当前流程"; publish(state);
             }
             if (command && !stopping_) {
-                state.busy = true; state.error = false; publish(state);
+                state.busy = true; state.importing = command->action == Action::ImportJson || command->action == Action::ImportImages;
+                state.error = false; publish(state);
                 try {
                     const auto& task = *command;
                     auto current = [&] { return !stopping_ && task.generation == generation; };
                     switch (task.action) {
-                        case Action::Apply: apply(task.settings); state.update = {}; state.update.message = u8"参数已应用"; break;
+                        case Action::Apply:
+                            apply(task.settings); state.update = {};
+                            state.update.message = state.settings.page == Page::ImageSearch && state.image_search ? state.image_search->summary : u8"参数已应用";
+                            break;
                         case Action::OpenCamera: {
                             if (task.settings.page != Page::CameraSettings) ensure();
                             apply(task.settings);
@@ -284,7 +304,7 @@ void App::run() {
                     state.flow_active = false; refresh();
                     notice = state.update.message; notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(8);
                 }
-                state.busy = false; state.completed_command = command->sequence; publish(state);
+                state.busy = state.importing = false; state.completed_command = command->sequence; publish(state);
             }
             if (!camera || stopping_) continue;
             try {

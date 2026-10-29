@@ -1,12 +1,29 @@
 #include "settings.h"
 #include "gallery.h"
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <map>
 #include <sstream>
 
 namespace hiface_linux_demo {
+bool useSoftwareMouseCursor(const std::string& mode, bool embedded_display) {
+    require(mode.empty() || mode == "auto" || mode == "software" || mode == "system",
+            "HIFACE_MOUSE_CURSOR must be auto, software or system");
+    return mode == "software" || ((mode.empty() || mode == "auto") && embedded_display);
+}
+int initialUiRotation() {
+    const char* value = std::getenv("HIFACE_DISPLAY_ROTATE");
+    const std::string rotation = value ? value : "";
+    if (rotation.empty() || rotation == "none" || rotation == "0") return 0;
+    // Preserve the existing embedded-display aliases and their input mapping.
+    // 保留已有嵌入式显示别名及其输入映射；数字表示顺时针角度。
+    if (rotation == "left" || rotation == "ccw" || rotation == "90ccw" || rotation == "90") return 90;
+    if (rotation == "right" || rotation == "cw" || rotation == "90cw" || rotation == "270") return 270;
+    if (rotation == "180") return 180;
+    throw DemoError{"HIFACE_DISPLAY_ROTATE must be 0/90/180/270, left/ccw/90ccw, right/cw/90cw or none"};
+}
 const char* actionName(HiFaceFlowActionV1 action) {
     switch (action) {
         case HIFACE_ACTION_BLINK: return "blink";
@@ -19,13 +36,19 @@ const char* actionName(HiFaceFlowActionV1 action) {
 std::vector<FormField> settingsFields(const DemoSettings& s) {
     std::string actions;
     for (auto action : s.actions) { if (!actions.empty()) actions += ','; actions += actionName(action); }
+    std::string verification_actions;
+    for (auto action : s.verification_actions) { if (!verification_actions.empty()) verification_actions += ','; verification_actions += actionName(action); }
     auto number = [](float x) { std::ostringstream text; text << x; return text.str(); };
     auto boolean = [](bool x) { return x ? "1" : "0"; };
     return {
         {"detection_faces", "Detection faces (1..10)", std::to_string(s.detection_faces)},
         {"detailed", "468 landmarks / pose (0/1)", boolean(s.detailed)},
         {"actions", "Actions: blink,nod,shake,mouth; empty = silent", actions},
-        {"allow_multiple", "Allow other faces in flow (0/1)", boolean(s.allow_multiple)},
+        {"allow_multiple", "Allow other faces in liveness (0/1)", boolean(s.allow_multiple)},
+        {"random_actions", "Three random liveness actions (0/1)", boolean(s.random_actions)},
+        {"verification_actions", "Verification actions", verification_actions},
+        {"verification_random_actions", "Two random verification actions (0/1)", boolean(s.verification_random_actions)},
+        {"verification_allow_multiple", "Allow other faces in verification (0/1)", boolean(s.verification_allow_multiple)},
         {"verification_liveness", "Verification silent liveness (0/1)", boolean(s.verification_liveness)},
         {"verification_threshold", "Verification threshold (0..1)", number(s.verification_threshold)},
         {"search_multi", "Search mode: 0 = 1:N, 1 = M:N", boolean(s.search_multi)},
@@ -39,7 +62,8 @@ std::vector<FormField> settingsFields(const DemoSettings& s) {
         {"camera_height", "Camera height (even, 2..1080)", std::to_string(s.camera_height)},
         {"camera_fps", "Requested camera FPS (1..60)", std::to_string(s.camera_fps)},
         {"camera_mjpeg", "Prefer MJPEG (0 = YUYV, 1 = MJPEG)", boolean(s.camera_mjpeg)},
-        {"mirror", "Mirror preview only (0/1)", boolean(s.mirror)}
+        {"mirror", "Mirror preview only (0/1)", boolean(s.mirror)},
+        {"ui_rotation", "Clockwise UI rotation (0/90/180/270)", std::to_string(s.ui_rotation)}
     };
 }
 DemoSettings parseSettings(const std::vector<FormField>& fields) {
@@ -64,6 +88,9 @@ DemoSettings parseSettings(const std::vector<FormField>& fields) {
     DemoSettings s;
     s.detection_faces = integer("detection_faces", 1, 10); s.detailed = integer("detailed", 0, 1);
     s.allow_multiple = integer("allow_multiple", 0, 1); s.verification_liveness = integer("verification_liveness", 0, 1);
+    s.random_actions = integer("random_actions", 0, 1);
+    s.verification_random_actions = integer("verification_random_actions", 0, 1);
+    s.verification_allow_multiple = integer("verification_allow_multiple", 0, 1);
     s.verification_threshold = number("verification_threshold", 0, 1);
     s.search_multi = integer("search_multi", 0, 1); s.search_liveness = integer("search_liveness", 0, 1) && !s.search_multi;
     s.search_faces = integer("search_faces", 1, 5); s.search_threshold = number("search_threshold", .75, .85);
@@ -72,23 +99,30 @@ DemoSettings parseSettings(const std::vector<FormField>& fields) {
     s.camera_width = integer("camera_width", 2, 1920); s.camera_height = integer("camera_height", 2, 1080);
     require(!(s.camera_width & 1) && !(s.camera_height & 1), "Camera dimensions must be even");
     s.camera_fps = integer("camera_fps", 1, 60); s.camera_mjpeg = integer("camera_mjpeg", 0, 1); s.mirror = integer("mirror", 0, 1);
-    std::istringstream actions(values["actions"]); std::string action;
-    while (std::getline(actions, action, ',')) {
-        const auto begin = action.find_first_not_of(" \t"), end = action.find_last_not_of(" \t");
-        require(begin != std::string::npos, "Empty action in list"); action = action.substr(begin, end - begin + 1);
-        HiFaceFlowActionV1 value;
-        if (action == "blink") value = HIFACE_ACTION_BLINK; else if (action == "nod") value = HIFACE_ACTION_NOD_HEAD;
-        else if (action == "shake") value = HIFACE_ACTION_SHAKE_HEAD; else if (action == "mouth") value = HIFACE_ACTION_MOUTH_OPEN;
-        else throw DemoError{"Unknown action: " + action};
-        s.actions.push_back(value); require(s.actions.size() <= HIFACE_MAX_FACE_FLOW_ACTIONS, "At most four actions, repeats allowed");
-    }
-    require(values["actions"].empty() || values["actions"].back() != ',', "Trailing comma in actions");
+    s.ui_rotation = integer("ui_rotation", 0, 270);
+    require(s.ui_rotation % 90 == 0, "ui_rotation must be 0, 90, 180 or 270");
+    auto parseActions = [&](const std::string& key, std::vector<HiFaceFlowActionV1>& output) {
+        std::istringstream actions(values[key]); std::string action;
+        while (std::getline(actions, action, ',')) {
+            const auto begin = action.find_first_not_of(" \t"), end = action.find_last_not_of(" \t");
+            require(begin != std::string::npos, "Empty action in list"); action = action.substr(begin, end - begin + 1);
+            HiFaceFlowActionV1 value;
+            if (action == "blink") value = HIFACE_ACTION_BLINK; else if (action == "nod") value = HIFACE_ACTION_NOD_HEAD;
+            else if (action == "shake") value = HIFACE_ACTION_SHAKE_HEAD; else if (action == "mouth") value = HIFACE_ACTION_MOUTH_OPEN;
+            else throw DemoError{"Unknown action: " + action};
+            output.push_back(value); require(output.size() <= HIFACE_MAX_FACE_FLOW_ACTIONS, "At most four actions, repeats allowed");
+        }
+        require(values[key].empty() || values[key].back() != ',', "Trailing comma in actions");
+    };
+    parseActions("actions", s.actions); parseActions("verification_actions", s.verification_actions);
     return s;
 }
 DemoSettings loadSettings(const std::string& file) {
-    auto fields = settingsFields(DemoSettings{});
+    DemoSettings defaults;
+    defaults.ui_rotation = initialUiRotation();
+    auto fields = settingsFields(defaults);
     std::ifstream input(file);
-    if (!std::filesystem::exists(file)) return {};
+    if (!std::filesystem::exists(file)) return defaults;
     require(bool(input), "Cannot read settings file");
     std::string key, value, line;
     std::map<std::string, bool> seen;
@@ -103,6 +137,17 @@ DemoSettings loadSettings(const std::string& file) {
         require(found, "Unknown saved setting: " + key);
     }
     require(input.eof(), "Invalid settings file");
+    // Old files had one custom sequence shared by both flows. Preserve it
+    // during migration; fresh installations use Android's random defaults.
+    if (seen.count("actions") && !seen.count("random_actions")) {
+        std::string old_actions, old_multiple;
+        for (auto& field : fields) { if (field.key == "actions") old_actions = field.value; if (field.key == "allow_multiple") old_multiple = field.value; }
+        for (auto& field : fields) {
+            if (field.key == "random_actions" || field.key == "verification_random_actions") field.value = "0";
+            if (field.key == "verification_actions" && !seen.count(field.key)) field.value = old_actions;
+            if (field.key == "verification_allow_multiple" && !seen.count(field.key)) field.value = old_multiple;
+        }
+    }
     return parseSettings(fields);
 }
 void saveSettings(const std::string& file, const DemoSettings& settings) {

@@ -2,9 +2,9 @@
 
 [English](README.md) | 简体中文
 
-**0.8.0 Beta**
+**0.8.1 Beta**
 
-Android、iOS、Harmony、Windows 和 Linux SDK 与 Demo 统一更新至 0.8.0。
+Android、iOS、Harmony、Windows 和 Linux SDK 与 Demo 统一更新至 0.8.1。
 
 ### 离线人脸检测、采集、活体、1:1 比对及 1:N/M:N 搜索。
 

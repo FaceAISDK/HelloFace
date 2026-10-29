@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
         std::cout << "Usage: hiface_desktop MODEL_DIR DATABASE [CAMERA_DEVICE|--smoke-test]\n"
                      "       hiface_desktop --camera-test CAMERA_DEVICE\n"
                      "       hiface_desktop --preview-test CAMERA_DEVICE OUTPUT_WIDTH OUTPUT_HEIGHT\n"
-                     "Home opens feature pages; Esc stops the current flow or returns Home. F1 Search, F2 Photos / comparison, F3 Face library, F4 Settings, F5 Image search.\n"
+                     "Home opens eight feature pages; Back or Esc returns to the previous page and stops its flow. F1 Search, F2 Photos / comparison, F3 Face capture, F4 SDK Settings, F5 Image search.\n"
                      "Camera shortcuts: D detection page, C capture, L liveness, V verify, E enroll, S search, P pause, X stop, M mirror, N next camera, Q quit.\n";
         return help ? 0 : 2;
     }

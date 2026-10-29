@@ -254,7 +254,7 @@ export const DEMO_TEXT_RESOURCES: Record<string, DemoTextResource> = {
   "搜索设置应用失败": { name: "demo_65c51a856d54", english: "Unable to apply search settings" },
   "搜索配置无效：{0}": { name: "demo_b78443a500ed", english: "Invalid search settings: {0}" },
   "摄像头分辨率": { name: "demo_f07daa84d0f6", english: "Camera resolution" },
-  "摄像头参数设置": { name: "demo_243c78b3db5c", english: "Camera Settings" },
+  "SDK参数设置": { name: "demo_59e32a5df863", english: "SDK Settings" },
   "摇头": { name: "demo_8be7156a778f", english: "Shake your head" },
   "操作失败": { name: "demo_0c3b4cf7aa25", english: "Operation failed" },
   "收起高级参数": { name: "demo_f8af6f45840a", english: "Hide advanced settings" },

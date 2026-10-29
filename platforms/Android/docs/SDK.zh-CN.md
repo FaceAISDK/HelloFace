@@ -208,7 +208,7 @@ Session 支持 `pause()`、`resume()`、`setConfig()`、`close()`；暂停释放
 - 技术错误与流程终态分开处理；`NOT_MATCHED`、`SPOOF_DETECTED`、超时等业务结论以 `outcome` / `endReason` 为准。
 
 相机结果为旋转后、未镜像的像素坐标，预览缩放、裁剪和前摄镜像由宿主统一映射。
-CameraX 适配与相机设置见下方示例入口；业务应记录实际采集/分析 FPS 与稳态耗时。
+CameraX 适配与SDK参数设置见下方示例入口；业务应记录实际采集/分析 FPS 与稳态耗时。
 
 ## 图片多人搜索
 

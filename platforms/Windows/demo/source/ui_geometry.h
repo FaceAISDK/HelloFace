@@ -58,18 +58,26 @@ struct PhotoLayout {
         return clampScroll(scroll, count);
     }
 };
-inline UiRect homeCard(int width, int height, int main_left, int count, int index) {
-    const int columns = width < 900 ? 2 : 3, gap = 12, rows = (count + columns - 1) / columns;
-    const int card_width = (width - main_left - 32 - gap * (columns - 1)) / columns;
-    const int card_height = std::min(142, (height - 190 - gap * (rows - 1)) / rows);
-    const int x = main_left + 8 + (index % columns) * (card_width + gap), y = 102 + (index / columns) * (card_height + gap);
-    return {x, y, x + card_width, y + card_height};
-}
-inline UiRect navigationItem(int height, int width, int count, int index) {
-    const int step = std::min(46, (height - 106) / count);
-    const int top = 94 + index * step;
-    return {12, top, width - 20, top + std::max(1, step - 6)};
-}
+struct HomeLayout {
+    UiRect viewport;
+    int count;
+    static constexpr int card_height = 84, step = 96;
+    HomeLayout(int width, int height, int entries) : viewport{32,112,width-24,std::max(112,height-164)}, count(entries) {}
+    int clampScroll(int scroll) const { return std::clamp(scroll,0,std::max(0,count*step-12-viewport.height())); }
+    UiRect card(int index, int scroll) const {
+        const int y=viewport.top+index*step-clampScroll(scroll);
+        return {viewport.left,y,viewport.right,y+card_height};
+    }
+    UiRect visible(int index, int scroll) const {
+        auto r=card(index,scroll); r.top=std::max(r.top,viewport.top);r.bottom=std::max(r.top,std::min(r.bottom,viewport.bottom));return r;
+    }
+    int reveal(int index, int scroll) const {
+        const auto r=card(index,0);
+        if(r.top-scroll<viewport.top) scroll=r.top-viewport.top;
+        else if(r.bottom-scroll>viewport.bottom) scroll=r.bottom-viewport.bottom;
+        return clampScroll(scroll);
+    }
+};
 // Toolbar controls wrap as a unit; native combobox popup height is independent.
 // 工具栏控件整体换行；原生组合框弹出列表的高度独立处理。
 struct ToolbarLayout {

@@ -29,22 +29,25 @@ struct SharedMemorySegmentInfo {
     Bool read_only;
 };
 constexpr int kPictOpSrc = 1;
-RenderFixed fixed(int value) { return static_cast<RenderFixed>(static_cast<int64_t>(value) << 16); }
+RenderFixed fixed(int value) { return static_cast<RenderFixed>(static_cast<int64_t>(value) * 65536); }
 }
 struct DesktopWindow::Impl {
-    enum class Rotation { none, left, right };
     void* library = nullptr; void* render_library = nullptr; void* xext_library = nullptr; Display* display = nullptr; Window window = 0; Pixmap back_buffer = 0; GC gc = nullptr; Visual* visual = nullptr; XImage* image = nullptr;
     SharedMemorySegmentInfo shared_image{};
-    bool shared_image_attached = false;
+    bool shared_image_attached = false, shared_memory_disabled = false;
     RenderPicture source_picture = 0, destination_picture = 0;
     std::array<XFontSet, 4> fonts{}; XIM input_method = nullptr; XIC input_context = nullptr;
     Atom delete_window = 0, clipboard = 0, utf8 = 0, paste_property = 0, targets = 0, atom_type = 0, string_type = 0;
     int depth = 0, width = 1060, height = 740, physical_width = 1060, physical_height = 740;
     int min_width = 600, min_height = 540, buffer_width = 0, buffer_height = 0;
-    Rotation rotation = Rotation::none;
+    int rotation = 0, buffer_rotation = -1;
+    Cursor mouse_cursor = 0;
+    int pointer_x = -1, pointer_y = -1;
+    bool software_cursor = false, pointer_inside = false;
     bool redraw = true;
     uint64_t painted_revision = 0, painted_preview = 0;
     const CameraFrame* painted_frame = nullptr;
+    std::shared_ptr<const std::vector<Box>> painted_camera_boxes;
     std::string paste_target, clipboard_text;
 #define FN(name) decltype(&name) name##_fn = nullptr
     FN(XOpenDisplay); FN(XCloseDisplay); FN(XDefaultScreen); FN(XDisplayWidth); FN(XDisplayHeight); FN(XDefaultVisual); FN(XDefaultDepth); FN(XRootWindow);
@@ -55,6 +58,9 @@ struct DesktopWindow::Impl {
     FN(XOpenIM); FN(XCloseIM); FN(XCreateIC); FN(XDestroyIC); FN(XSetICFocus); FN(XUnsetICFocus); FN(Xutf8LookupString); FN(XFilterEvent);
     FN(XConvertSelection); FN(XGetWindowProperty); FN(XDeleteProperty); FN(XFree); FN(XSetSelectionOwner); FN(XChangeProperty); FN(XSendEvent);
     FN(XSetClipRectangles); FN(XSetClipMask);
+    FN(XDrawSegments); FN(XFillRectangles); FN(XFillArcs); FN(XSetLineAttributes);
+    FN(XSetErrorHandler); FN(XNextRequest);
+    FN(XCreateBitmapFromData); FN(XCreatePixmapCursor); FN(XDefineCursor); FN(XFreeCursor); FN(XQueryPointer); FN(XSetInputFocus);
 #undef FN
     RenderPictFormat* (*XRenderFindVisualFormat_fn)(Display*, Visual*) = nullptr;
     RenderPicture (*XRenderCreatePicture_fn)(Display*, Drawable, const RenderPictFormat*, unsigned long, const RenderPictureAttributes*) = nullptr;
@@ -77,9 +83,12 @@ struct DesktopWindow::Impl {
         LOAD(XCreateGC); LOAD(XFreeGC); LOAD(XPending); LOAD(XNextEvent); LOAD(XSetForeground); LOAD(XFillRectangle); LOAD(XFillArc); LOAD(XDrawString);
         LOAD(XCreateImage); LOAD(XPutImage); LOAD(XFlush); LOAD(XSync); LOAD(XInternAtom); LOAD(XSetWMProtocols); LOAD(XCreatePixmap); LOAD(XFreePixmap); LOAD(XCopyArea);
         LOAD(XCreateFontSet); LOAD(XFreeFontSet); LOAD(XFreeStringList); LOAD(Xutf8DrawString); LOAD(Xutf8TextExtents);
+        LOAD(XDrawSegments); LOAD(XFillRectangles); LOAD(XFillArcs); LOAD(XSetLineAttributes);
         LOAD(XOpenIM); LOAD(XCloseIM); LOAD(XCreateIC); LOAD(XDestroyIC); LOAD(XSetICFocus); LOAD(XUnsetICFocus); LOAD(Xutf8LookupString); LOAD(XFilterEvent);
         LOAD(XConvertSelection); LOAD(XGetWindowProperty); LOAD(XDeleteProperty); LOAD(XFree); LOAD(XSetSelectionOwner); LOAD(XChangeProperty); LOAD(XSendEvent);
         LOAD(XSetClipRectangles); LOAD(XSetClipMask);
+        LOAD(XSetErrorHandler); LOAD(XNextRequest);
+        LOAD(XCreateBitmapFromData); LOAD(XCreatePixmapCursor); LOAD(XDefineCursor); LOAD(XFreeCursor); LOAD(XQueryPointer); LOAD(XSetInputFocus);
 #undef LOAD
         lookup = reinterpret_cast<decltype(lookup)>(dlsym(library, "XLookupString")); require(lookup, "Missing X11 keyboard support");
         display = XOpenDisplay_fn(nullptr); require(display, "Cannot open DISPLAY. Start from an Ubuntu desktop terminal (X11 or XWayland).");
@@ -95,40 +104,26 @@ struct DesktopWindow::Impl {
         }
         const int screen = XDefaultScreen_fn(display); visual = XDefaultVisual_fn(display, screen); depth = XDefaultDepth_fn(display, screen); require(depth == 24 || depth == 32, "This Demo requires a 24/32-bit desktop visual");
         const int screen_width = XDisplayWidth_fn(display, screen), screen_height = XDisplayHeight_fn(display, screen);
-        const char* requested_rotation = std::getenv("HIFACE_DISPLAY_ROTATE");
-        if (requested_rotation && (!std::strcmp(requested_rotation, "left") || !std::strcmp(requested_rotation, "ccw") || !std::strcmp(requested_rotation, "90ccw"))) rotation = Rotation::left;
-        else if (requested_rotation && (!std::strcmp(requested_rotation, "right") || !std::strcmp(requested_rotation, "cw") || !std::strcmp(requested_rotation, "90cw"))) rotation = Rotation::right;
-        else require(!requested_rotation || !*requested_rotation || !std::strcmp(requested_rotation, "none"),
-            "HIFACE_DISPLAY_ROTATE must be left/ccw/90ccw, right/cw/90cw or none");
+        rotation = initialUiRotation();
         const bool embedded_display = screen_width <= 1280 || screen_height <= 720;
         physical_width = embedded_display ? screen_width : std::max(960, std::min(physical_width, screen_width - 48));
         physical_height = embedded_display ? screen_height : std::max(700, std::min(physical_height, screen_height - 80));
-        width = rotation == Rotation::none ? physical_width : physical_height;
-        height = rotation == Rotation::none ? physical_height : physical_width;
+        updateLogicalSize();
         min_width = std::min(min_width, width); min_height = std::min(min_height, height);
         const int window_x = embedded_display ? 0 : 20, window_y = embedded_display ? 0 : 20;
         window = XCreateSimpleWindow_fn(display, XRootWindow_fn(display, screen), window_x, window_y, physical_width, physical_height, 0, 0, pixel(0xf5f5f7)); require(window, "Cannot create window");
-        XStoreName_fn(display, window, "HiFace - Linux Demo"); XSelectInput_fn(display, window, ExposureMask | KeyPressMask | ButtonPressMask | PointerMotionMask | StructureNotifyMask | FocusChangeMask | PropertyChangeMask);
+        XStoreName_fn(display, window, "HiFace - Linux Demo"); XSelectInput_fn(display, window, ExposureMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | EnterWindowMask | LeaveWindowMask | StructureNotifyMask | FocusChangeMask | PropertyChangeMask);
+        initializeCursor(embedded_display);
         delete_window = XInternAtom_fn(display, "WM_DELETE_WINDOW", False); clipboard = XInternAtom_fn(display, "CLIPBOARD", False); utf8 = XInternAtom_fn(display, "UTF8_STRING", False);
         paste_property = XInternAtom_fn(display, "HIFACE_PASTE", False); targets = XInternAtom_fn(display, "TARGETS", False); atom_type = XInternAtom_fn(display, "ATOM", False); string_type = XInternAtom_fn(display, "STRING", False);
         XSetWMProtocols_fn(display, window, &delete_window, 1); gc = XCreateGC_fn(display, window, 0, nullptr); require(gc, "Cannot create graphics context");
-        if (embedded_display || rotation != Rotation::none) {
+        if (embedded_display || rotation != 0) {
             const Atom wm_state = XInternAtom_fn(display, "_NET_WM_STATE", False);
             const Atom fullscreen = XInternAtom_fn(display, "_NET_WM_STATE_FULLSCREEN", False);
             XChangeProperty_fn(display, window, wm_state, atom_type, 32, PropModeReplace,
                 reinterpret_cast<const unsigned char*>(&fullscreen), 1);
         }
-        if (rotation != Rotation::none) {
-            render_library = dlopen("libXrender.so.1", RTLD_NOW | RTLD_LOCAL);
-            require(render_library, "Internal display rotation needs libXrender.so.1");
-#define RLOAD(name) name##_fn = reinterpret_cast<decltype(name##_fn)>(dlsym(render_library, #name)); require(name##_fn, "Missing Xrender function: " #name)
-            RLOAD(XRenderFindVisualFormat); RLOAD(XRenderCreatePicture); RLOAD(XRenderFreePicture);
-            RLOAD(XRenderSetPictureTransform); RLOAD(XRenderComposite);
-#undef RLOAD
-            auto* format = XRenderFindVisualFormat_fn(display, visual); require(format, "Xrender does not support the desktop visual");
-            destination_picture = XRenderCreatePicture_fn(display, window, format, 0, nullptr);
-            require(destination_picture, "Cannot create rotated display target");
-        }
+        if (rotation != 0) ensureRotationRenderer();
         // The target Buildroot image ships the X11 misc bitmap font family,
         // not Helvetica. Name its installed aliases first so kiosk typography
         // retains the requested pixel sizes instead of silently using `fixed`.
@@ -137,7 +132,77 @@ struct DesktopWindow::Impl {
         for (size_t i = 0; i < fonts.size(); ++i) { char** missing = nullptr; int count = 0; char* fallback = nullptr; fonts[i] = XCreateFontSet_fn(display, patterns[i], &missing, &count, &fallback); if (missing) XFreeStringList_fn(missing); }
         input_method = XOpenIM_fn(display, nullptr, nullptr, nullptr);
         if (input_method) input_context = XCreateIC_fn(input_method, XNInputStyle, XIMPreeditNothing | XIMStatusNothing, XNClientWindow, window, XNFocusWindow, window, static_cast<char*>(nullptr));
-        XMapWindow_fn(display, window); XFlush_fn(display);
+        XMapWindow_fn(display, window); XFlush_fn(display); queryPointer();
+    }
+    void initializeCursor(bool embedded_display) {
+        const char* keyboard = std::getenv("HIFACE_SOFT_KEYBOARD");
+        const std::string keyboard_mode = keyboard ? keyboard : "auto";
+        require(keyboard_mode == "auto" || keyboard_mode == "0" || keyboard_mode == "1", "HIFACE_SOFT_KEYBOARD must be auto, 0 or 1");
+        ui.setSoftKeyboardEnabled(keyboard_mode == "1" || keyboard_mode == "auto" && embedded_display);
+        const char* requested = std::getenv("HIFACE_MOUSE_CURSOR");
+        const std::string mode = requested ? requested : "auto";
+        software_cursor = useSoftwareMouseCursor(mode, embedded_display);
+        const auto& bitmap = mouseCursorBitmap();
+        const std::array<uint8_t, MouseCursorBitmap::stride * MouseCursorBitmap::height> blank{};
+        const auto& source_bits = software_cursor ? blank : bitmap.source;
+        const auto& mask_bits = software_cursor ? blank : bitmap.mask;
+        const Pixmap source = XCreateBitmapFromData_fn(display, window,
+            reinterpret_cast<const char*>(source_bits.data()), bitmap.width, bitmap.height);
+        const Pixmap mask = XCreateBitmapFromData_fn(display, window,
+            reinterpret_cast<const char*>(mask_bits.data()), bitmap.width, bitmap.height);
+        if (!source || !mask) {
+            if (source) XFreePixmap_fn(display, source);
+            if (mask) XFreePixmap_fn(display, mask);
+            throw DemoError{"Cannot create mouse cursor bitmaps"};
+        }
+        XColor foreground{}, background{};
+        foreground.red = foreground.green = foreground.blue = 65535;
+        foreground.flags = background.flags = DoRed | DoGreen | DoBlue;
+        mouse_cursor = XCreatePixmapCursor_fn(display, source, mask, &foreground, &background, 0, 0);
+        XFreePixmap_fn(display, source); XFreePixmap_fn(display, mask);
+        require(mouse_cursor, "Cannot create mouse cursor");
+        // A transparent native cursor prevents a duplicate arrow in software
+        // mode, including kiosk X servers started with -nocursor.
+        // 软件模式隐藏原生箭头，避免双光标；也兼容以 -nocursor 启动的嵌入式 X Server。
+        XDefineCursor_fn(display, window, mouse_cursor);
+    }
+    void pointer(int x, int y, bool inside) {
+        pointer_x = x; pointer_y = y;
+        pointer_inside = inside && x >= 0 && y >= 0 && x < physical_width && y < physical_height;
+        const auto logical = pointer_inside ? logicalPoint(x, y) : std::pair<int, int>{-1, -1};
+        ui.pointer(logical.first, logical.second);
+    }
+    void queryPointer() {
+        Window root = 0, child = 0; int root_x = 0, root_y = 0, x = 0, y = 0; unsigned mask = 0;
+        const bool same_screen = XQueryPointer_fn(display, window, &root, &child, &root_x, &root_y, &x, &y, &mask);
+        pointer(x, y, same_screen);
+    }
+    void ensureRotationRenderer() {
+        if (destination_picture) return;
+        if (!render_library)
+            render_library = dlopen("libXrender.so.1", RTLD_NOW | RTLD_LOCAL);
+        require(render_library, "Internal display rotation needs libXrender.so.1");
+#define RLOAD(name) name##_fn = reinterpret_cast<decltype(name##_fn)>(dlsym(render_library, #name)); require(name##_fn, "Missing Xrender function: " #name)
+        RLOAD(XRenderFindVisualFormat); RLOAD(XRenderCreatePicture); RLOAD(XRenderFreePicture);
+        RLOAD(XRenderSetPictureTransform); RLOAD(XRenderComposite);
+#undef RLOAD
+        auto* format = XRenderFindVisualFormat_fn(display, visual); require(format, "Xrender does not support the desktop visual");
+        destination_picture = XRenderCreatePicture_fn(display, window, format, 0, nullptr);
+        require(destination_picture, "Cannot create rotated display target");
+    }
+    void updateLogicalSize() {
+        const bool swap = DisplayTransform{rotation}.swapsAxes();
+        width = swap ? physical_height : physical_width;
+        height = swap ? physical_width : physical_height;
+    }
+    void syncRotation(const ViewState& state) {
+        if (!state.ready || rotation == state.settings.ui_rotation) return;
+        if (state.settings.ui_rotation) ensureRotationRenderer();
+        rotation = state.settings.ui_rotation;
+        updateLogicalSize();
+        pointer(pointer_x, pointer_y, pointer_inside);
+        ui.render(state, width, height);
+        redraw = true;
     }
     ~Impl() {
         if (source_picture) XRenderFreePicture_fn(display, source_picture);
@@ -145,6 +210,7 @@ struct DesktopWindow::Impl {
         destroyPreviewImage(); if (back_buffer) XFreePixmap_fn(display, back_buffer);
         if (input_context) XDestroyIC_fn(input_context); if (input_method) XCloseIM_fn(input_method);
         for (auto font : fonts) if (font) XFreeFontSet_fn(display, font);
+        if (mouse_cursor) XFreeCursor_fn(display, mouse_cursor);
         if (gc) XFreeGC_fn(display, gc); if (window) XDestroyWindow_fn(display, window); if (display) XCloseDisplay_fn(display);
         if (render_library) dlclose(render_library); if (xext_library) dlclose(xext_library); if (library) dlclose(library);
     }
@@ -157,15 +223,16 @@ struct DesktopWindow::Impl {
         if (fonts[size_t(font)]) { XRectangle ink{}, logical{}; Xutf8TextExtents_fn(fonts[size_t(font)], text.c_str(), text.size(), &ink, &logical); return logical.width; }
         return int(text.size()) * 7;
     }
-    void box(const Draw& d) {
+    void box(const Draw& d, Drawable target = 0) {
+        if (!target) target = back_buffer;
         const auto r = d.bounds; if (r.w <= 0 || r.h <= 0) return; const int radius = std::min({d.radius, r.w / 2, r.h / 2});
         XSetForeground_fn(display, gc, pixel(d.color));
-        if (!radius) { XFillRectangle_fn(display, back_buffer, gc, r.x, r.y, r.w, r.h); return; }
-        XFillRectangle_fn(display, back_buffer, gc, r.x + radius, r.y, r.w - radius * 2, r.h); XFillRectangle_fn(display, back_buffer, gc, r.x, r.y + radius, r.w, r.h - radius * 2);
-        XFillArc_fn(display, back_buffer, gc, r.x, r.y, radius * 2, radius * 2, 90 * 64, 90 * 64);
-        XFillArc_fn(display, back_buffer, gc, r.x + r.w - radius * 2, r.y, radius * 2, radius * 2, 0, 90 * 64);
-        XFillArc_fn(display, back_buffer, gc, r.x, r.y + r.h - radius * 2, radius * 2, radius * 2, 180 * 64, 90 * 64);
-        XFillArc_fn(display, back_buffer, gc, r.x + r.w - radius * 2, r.y + r.h - radius * 2, radius * 2, radius * 2, 270 * 64, 90 * 64);
+        if (!radius) { XFillRectangle_fn(display, target, gc, r.x, r.y, r.w, r.h); return; }
+        XFillRectangle_fn(display, target, gc, r.x + radius, r.y, r.w - radius * 2, r.h); XFillRectangle_fn(display, target, gc, r.x, r.y + radius, r.w, r.h - radius * 2);
+        XFillArc_fn(display, target, gc, r.x, r.y, radius * 2, radius * 2, 90 * 64, 90 * 64);
+        XFillArc_fn(display, target, gc, r.x + r.w - radius * 2, r.y, radius * 2, radius * 2, 0, 90 * 64);
+        XFillArc_fn(display, target, gc, r.x, r.y + r.h - radius * 2, radius * 2, radius * 2, 180 * 64, 90 * 64);
+        XFillArc_fn(display, target, gc, r.x + r.w - radius * 2, r.y + r.h - radius * 2, radius * 2, radius * 2, 270 * 64, 90 * 64);
     }
     void destroyPreviewImage() {
         if (!image) return;
@@ -184,7 +251,7 @@ struct DesktopWindow::Impl {
     }
     void createPreviewImage(int w, int h) {
         destroyPreviewImage();
-        if (xext_library) {
+        if (xext_library && !shared_memory_disabled) {
             shared_image = {};
             auto* shared = XShmCreateImage_fn(display, visual, depth, ZPixmap, nullptr, &shared_image, w, h);
             if (shared && shared->bits_per_pixel == 32) {
@@ -195,8 +262,9 @@ struct DesktopWindow::Impl {
                     shared_image.read_only = False;
                     if (shared_image.address != reinterpret_cast<char*>(-1)) {
                         shared->data = shared_image.address;
-                        if (XShmAttach_fn(display, &shared_image)) {
-                            XSync_fn(display, False);
+                        const bool attached = tryOptionalX11Request<Display, XErrorEvent>(display, XSetErrorHandler_fn, XSync_fn,
+                            XNextRequest_fn, [&] { return XShmAttach_fn(display, &shared_image) != False; });
+                        if (attached) {
                             // Remove the kernel name immediately. Both Xorg and
                             // the client keep their attachments, and a crash or
                             // service restart can no longer leak the segment.
@@ -206,6 +274,7 @@ struct DesktopWindow::Impl {
                             shared_image_attached = true;
                             return;
                         }
+                        shared_memory_disabled = true;
                         shared->data = nullptr;
                         shmdt(shared_image.address);
                     }
@@ -253,46 +322,75 @@ struct DesktopWindow::Impl {
     }
     void paint(const ViewState& state) {
         if (!window || !ui.open()) return;
+        syncRotation(state);
         if (!redraw && painted_revision == state.visual_revision && painted_preview == state.preview_sequence &&
-            painted_frame == state.frame.get() && width == buffer_width && height == buffer_height) return;
-        if (!back_buffer || width != buffer_width || height != buffer_height) {
+            painted_frame == state.frame.get() && painted_camera_boxes == state.camera_boxes && width == buffer_width && height == buffer_height) return;
+        if (!back_buffer || width != buffer_width || height != buffer_height || rotation != buffer_rotation) {
             if (source_picture) { XRenderFreePicture_fn(display, source_picture); source_picture = 0; }
             if (back_buffer) XFreePixmap_fn(display, back_buffer);
             back_buffer = XCreatePixmap_fn(display, window, width, height, depth); require(back_buffer, "Cannot create back buffer");
-            buffer_width = width; buffer_height = height;
-            if (rotation != Rotation::none) {
+            buffer_width = width; buffer_height = height; buffer_rotation = rotation;
+            if (rotation != 0) {
                 auto* format = XRenderFindVisualFormat_fn(display, visual);
                 source_picture = XRenderCreatePicture_fn(display, back_buffer, format, 0, nullptr);
                 require(source_picture, "Cannot create rotated scene source");
                 RenderTransform transform{};
-                transform.matrix[2][2] = fixed(1);
-                if (rotation == Rotation::left) {
-                    transform.matrix[0][1] = fixed(1);
-                    transform.matrix[1][0] = fixed(-1);
-                    transform.matrix[1][2] = fixed(height);
-                } else {
-                    transform.matrix[0][1] = fixed(-1);
-                    transform.matrix[0][2] = fixed(width);
-                    transform.matrix[1][0] = fixed(1);
-                }
+                const auto matrix = DisplayTransform{rotation, width, height}.inverseMatrix();
+                for (int i = 0; i < 9; ++i) transform.matrix[i / 3][i % 3] = fixed(matrix[i]);
                 XRenderSetPictureTransform_fn(display, source_picture, &transform);
             }
         }
         const auto& scene = ui.render(state, width, height);
-        for (const auto& d : scene.draws) {
+        Rect previous_clip{};
+        std::array<XSegment,256> segments{};
+        std::array<XRectangle,256> rectangles{};
+        std::array<XArc,256> dots{};
+        for (size_t index = 0; index < scene.draws.size();) {
+            const auto end = scene.batchEnd(index);
+            const auto& d = scene.draws[index];
+            const auto begin = index; index = end;
             const auto clip = d.clip.intersect({0, 0, width, height}); if (!clip.w || !clip.h) continue;
-            XRectangle rectangle{static_cast<short>(clip.x), static_cast<short>(clip.y), static_cast<unsigned short>(clip.w), static_cast<unsigned short>(clip.h)};
-            XSetClipRectangles_fn(display, gc, 0, 0, &rectangle, 1, Unsorted);
-            if (d.kind == Draw::Box) box(d);
+            if (clip.x != previous_clip.x || clip.y != previous_clip.y || clip.w != previous_clip.w || clip.h != previous_clip.h) {
+                XRectangle rectangle{static_cast<short>(clip.x), static_cast<short>(clip.y), static_cast<unsigned short>(clip.w), static_cast<unsigned short>(clip.h)};
+                XSetClipRectangles_fn(display, gc, 0, 0, &rectangle, 1, Unsorted);
+                previous_clip = clip;
+            }
+            if (d.kind == Draw::Line || d.kind == Draw::Dot || (d.kind == Draw::Box && !d.radius)) {
+                XSetForeground_fn(display, gc, pixel(d.color));
+                size_t count = 0;
+                for (size_t item = begin; item < end; ++item) {
+                    const auto r = scene.draws[item].bounds;
+                    if (d.kind == Draw::Line) segments[count++] = {static_cast<short>(r.x),static_cast<short>(r.y),static_cast<short>(r.x+r.w),static_cast<short>(r.y+r.h)};
+                    else if (r.w > 0 && r.h > 0) {
+                        if (d.kind == Draw::Dot) dots[count++] = {static_cast<short>(r.x),static_cast<short>(r.y),static_cast<unsigned short>(r.w),static_cast<unsigned short>(r.h),0,360*64};
+                        else rectangles[count++] = {static_cast<short>(r.x),static_cast<short>(r.y),static_cast<unsigned short>(r.w),static_cast<unsigned short>(r.h)};
+                    }
+                }
+                if (count && d.kind == Draw::Line) {
+                    XSetLineAttributes_fn(display, gc, d.line_width, LineSolid, CapRound, JoinRound);
+                    XDrawSegments_fn(display, back_buffer, gc, segments.data(), count);
+                } else if (count && d.kind == Draw::Dot) XFillArcs_fn(display, back_buffer, gc, dots.data(), count);
+                else if (count) XFillRectangles_fn(display, back_buffer, gc, rectangles.data(), count);
+            }
+            else if (d.kind == Draw::Box) box(d);
             else if (d.kind == Draw::Image) picture(d);
             else { XSetForeground_fn(display, gc, pixel(d.color)); if (fonts[size_t(d.font)]) Xutf8DrawString_fn(display, back_buffer, fonts[size_t(d.font)], gc, d.bounds.x, d.bounds.y, d.text.c_str(), d.text.size()); else XDrawString_fn(display, back_buffer, gc, d.bounds.x, d.bounds.y, d.text.c_str(), d.text.size()); }
         }
         XSetClipMask_fn(display, gc, None);
-        if (rotation == Rotation::none) XCopyArea_fn(display, back_buffer, window, gc, 0, 0, width, height, 0, 0);
+        if (rotation == 0) XCopyArea_fn(display, back_buffer, window, gc, 0, 0, width, height, 0, 0);
         else XRenderComposite_fn(display, kPictOpSrc, source_picture, 0, destination_picture,
             0, 0, 0, 0, 0, 0, physical_width, physical_height);
+        if (software_cursor && pointer_inside) {
+            // Composite the cursor last in physical coordinates, so rotation
+            // never moves its hotspot away from the X11 mouse coordinates.
+            // 光标最后按物理坐标绘制，UI 旋转不改变鼠标热点；下一帧全景重绘会清除旧箭头。
+            Scene cursor; cursor.width = physical_width; cursor.height = physical_height;
+            cursor.clip = {0, 0, physical_width, physical_height}; cursor.mouseCursor(pointer_x, pointer_y);
+            for (const auto& draw : cursor.draws) box(draw, window);
+        }
         XFlush_fn(display);
         painted_revision = state.visual_revision; painted_preview = state.preview_sequence;
+        painted_camera_boxes = state.camera_boxes;
         painted_frame = state.frame.get(); redraw = false;
     }
     void key(XKeyEvent& event, const ViewState& state) {
@@ -323,9 +421,7 @@ struct DesktopWindow::Impl {
         XSendEvent_fn(display, request.requestor, False, 0, &reply); XFlush_fn(display);
     }
     std::pair<int, int> logicalPoint(int x, int y) const {
-        if (rotation == Rotation::left) return {y, height - 1 - x};
-        if (rotation == Rotation::right) return {width - 1 - y, x};
-        return {x, y};
+        return DisplayTransform{rotation, width, height}.logicalPoint(x, y);
     }
 };
 DesktopWindow::DesktopWindow() : impl_(new Impl) { impl_->initialize(); }
@@ -335,27 +431,51 @@ void DesktopWindow::paint(const ViewState& state) { impl_->paint(state); }
 void DesktopWindow::smokePage(unsigned index) { impl_->ui.pageForSmoke(index); impl_->redraw = true; }
 std::vector<Command> DesktopWindow::events(const ViewState& state) {
     auto& ui = *impl_;
+    ui.syncRotation(state);
     while (ui.XPending_fn(ui.display)) {
         XEvent event{}; ui.XNextEvent_fn(ui.display, &event); if (ui.XFilterEvent_fn(&event, ui.window)) continue;
         ui.redraw = true;
         if (event.type == ClientMessage && static_cast<Atom>(event.xclient.data.l[0]) == ui.delete_window) ui.ui.requestClose(state);
-        if (event.type == DestroyNotify) { ui.window = 0; }
+        if (event.type == DestroyNotify) { ui.window = 0; break; }
         if (event.type == FocusIn && ui.input_context) ui.XSetICFocus_fn(ui.input_context); if (event.type == FocusOut && ui.input_context) ui.XUnsetICFocus_fn(ui.input_context);
         if (event.type == ConfigureNotify) {
-            const int min_physical_width = ui.rotation == Impl::Rotation::none ? ui.min_width : ui.min_height;
-            const int min_physical_height = ui.rotation == Impl::Rotation::none ? ui.min_height : ui.min_width;
+            const bool swap = DisplayTransform{ui.rotation}.swapsAxes();
+            const int min_physical_width = swap ? ui.min_height : ui.min_width;
+            const int min_physical_height = swap ? ui.min_width : ui.min_height;
             ui.physical_width = std::max(min_physical_width, event.xconfigure.width);
             ui.physical_height = std::max(min_physical_height, event.xconfigure.height);
-            ui.width = ui.rotation == Impl::Rotation::none ? ui.physical_width : ui.physical_height;
-            ui.height = ui.rotation == Impl::Rotation::none ? ui.physical_height : ui.physical_width;
+            ui.updateLogicalSize();
             if (ui.physical_width != event.xconfigure.width || ui.physical_height != event.xconfigure.height)
                 ui.XResizeWindow_fn(ui.display, ui.window, ui.physical_width, ui.physical_height);
+            ui.queryPointer();
+            ui.ui.render(state, ui.width, ui.height);
         }
         try {
-            if (event.type == MotionNotify) { const auto point = ui.logicalPoint(event.xmotion.x, event.xmotion.y); ui.ui.pointer(point.first, point.second); }
+            if (event.type == EnterNotify) ui.pointer(event.xcrossing.x, event.xcrossing.y, true);
+            if (event.type == LeaveNotify) ui.pointer(event.xcrossing.x, event.xcrossing.y, false);
+            if (event.type == MotionNotify) {
+                ui.pointer(event.xmotion.x, event.xmotion.y, true);
+                if (event.xmotion.state & Button1Mask) { const auto point=ui.logicalPoint(event.xmotion.x,event.xmotion.y);ui.ui.drag(point.first,point.second,state); }
+            }
+            if (event.type == ButtonRelease) ui.ui.releasePointer();
             if (event.type == KeyPress) ui.key(event.xkey, state);
-            if (event.type == ButtonPress && event.xbutton.button == Button1) { const auto point = ui.logicalPoint(event.xbutton.x, event.xbutton.y); ui.ui.click(point.first, point.second, state); }
-            if (event.type == ButtonPress && (event.xbutton.button == Button4 || event.xbutton.button == Button5)) { const auto point = ui.logicalPoint(event.xbutton.x, event.xbutton.y); ui.ui.scroll(event.xbutton.button == Button4 ? -1 : 1, point.first, point.second, state); }
+            if (event.type == ButtonPress) {
+                // A click may arrive before motion, or in the same batch as
+                // a menu/resize. Hit-test the current layout at its own position.
+                // 点击可先于移动事件，或与菜单/缩放同批到达；按本次坐标和当前布局命中控件。
+                ui.pointer(event.xbutton.x, event.xbutton.y, true);
+                ui.ui.render(state, ui.width, ui.height);
+                const auto point = ui.logicalPoint(event.xbutton.x, event.xbutton.y);
+                if (ui.pointer_inside && event.xbutton.button == Button1) {
+                    // Embedded X11 sessions may have no window manager to focus
+                    // the clicked window before typing into an input field.
+                    // 无窗口管理器的嵌入式 X11 会话也能点击取得键盘输入焦点。
+                    ui.XSetInputFocus_fn(ui.display, ui.window, RevertToParent, event.xbutton.time);
+                    ui.ui.click(point.first, point.second, state);
+                }
+                if (ui.pointer_inside && (event.xbutton.button == Button4 || event.xbutton.button == Button5))
+                    ui.ui.scroll(event.xbutton.button == Button4 ? -1 : 1, point.first, point.second, state);
+            }
             if (event.type == SelectionRequest) ui.selection(event.xselectionrequest);
             if (event.type == SelectionClear) ui.clipboard_text.clear();
             if (event.type == SelectionNotify && event.xselection.property == ui.paste_property) {
@@ -366,6 +486,14 @@ std::vector<Command> DesktopWindow::events(const ViewState& state) {
         } catch (const DemoError& error) { ui.ui.reportError(error.message); }
         catch (const std::exception& error) { ui.ui.reportError(error.what()); }
     }
-    return ui.ui.takeCommands();
+    auto commands = ui.ui.takeCommands();
+    commands.erase(std::remove_if(commands.begin(), commands.end(), [&](const Command& command) {
+        if (command.type != "settings") return false;
+        try {
+            if (parseSettings(command.fields).ui_rotation) ui.ensureRotationRenderer();
+            return false;
+        } catch (const DemoError& error) { ui.ui.rejectSettings(error.message); return true; }
+    }), commands.end());
+    return commands;
 }
 }

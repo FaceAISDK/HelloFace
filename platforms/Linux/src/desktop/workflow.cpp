@@ -2,19 +2,34 @@
 #include "image_decode.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <random>
 #include <sstream>
+#include <unordered_map>
 namespace hiface_linux_demo {
 int64_t monotonicMilliseconds() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 namespace {
 std::string score(float value) { std::ostringstream out; out << std::fixed << std::setprecision(3) << value; return out.str(); }
-std::string uniqueId(const char* prefix) {
-    return std::string(prefix) + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
+const char* actionInstruction(HiFaceFlowActionV1 action) {
+    switch (action) {
+        case HIFACE_ACTION_BLINK: return "blink";
+        case HIFACE_ACTION_NOD_HEAD: return "nod your head";
+        case HIFACE_ACTION_SHAKE_HEAD: return "shake your head";
+        case HIFACE_ACTION_MOUTH_OPEN: return "open your mouth";
+        default: return "follow the action";
+    }
 }
+std::vector<HiFaceFlowActionV1> randomActions(size_t count) {
+    std::array<HiFaceFlowActionV1, 4> choices{HIFACE_ACTION_BLINK, HIFACE_ACTION_NOD_HEAD, HIFACE_ACTION_SHAKE_HEAD, HIFACE_ACTION_MOUTH_OPEN};
+    std::mt19937 generator(std::random_device{}()); std::shuffle(choices.begin(), choices.end(), generator);
+    return {choices.begin(), choices.begin() + count};
+}
+
 std::string stage(HiFaceFlowStageV1 value) {
     switch (value) {
         case HIFACE_STAGE_MULTIPLE_FACES: return "One person at a time";
@@ -23,7 +38,7 @@ std::string stage(HiFaceFlowStageV1 value) {
         case HIFACE_STAGE_HOLD_STILL: return "Hold still";
         case HIFACE_STAGE_FACE_FORWARD: return "Look straight ahead";
         case HIFACE_STAGE_FACE_UNSTABLE: return "Keep your face steady";
-        default: return "Waiting for a face";
+        default: return "Place your face inside the circle";
     }
 }
 std::string outcome(HiFaceFlowOutcomeV1 value) {
@@ -39,18 +54,56 @@ std::string outcome(HiFaceFlowOutcomeV1 value) {
         default: return "Unknown flow outcome";
     }
 }
+} // namespace
 std::vector<Box> detectionBoxes(const HiFaceFaceV1* faces, uint32_t count) {
-    std::vector<Box> boxes;
+    // Same lips, eyes, face outline and nose connections as Android; no eyebrows.
+    static const std::vector<std::vector<uint16_t>> groups = {
+        {61, 146, 146, 91, 91, 181, 181, 84, 84, 17, 17, 314, 314, 405, 405, 321, 321, 375, 375, 291, 61, 185, 185, 40, 40, 39, 39, 37, 37, 0, 0, 267, 267, 269, 269, 270, 270, 409, 409, 291, 78, 95, 95, 88, 88, 178, 178, 87, 87, 14, 14, 317, 317, 402, 402, 318, 318, 324, 324, 308, 78, 191, 191, 80, 80, 81, 81, 82, 82, 13, 13, 312, 312, 311, 311, 310, 310, 415, 415, 308},
+        {263, 249, 249, 390, 390, 373, 373, 374, 374, 380, 380, 381, 381, 382, 382, 362, 263, 466, 466, 388, 388, 387, 387, 386, 386, 385, 385, 384, 384, 398, 398, 362},
+        {33, 7, 7, 163, 163, 144, 144, 145, 145, 153, 153, 154, 154, 155, 155, 133, 33, 246, 246, 161, 161, 160, 160, 159, 159, 158, 158, 157, 157, 173, 173, 133},
+        {10, 338, 338, 297, 297, 332, 332, 284, 284, 251, 251, 389, 389, 356, 356, 454, 454, 323, 323, 361, 361, 288, 288, 397, 397, 365, 365, 379, 379, 378, 378, 400, 400, 377, 377, 152, 152, 148, 148, 176, 176, 149, 149, 150, 150, 136, 136, 172, 172, 58, 58, 132, 132, 93, 93, 234, 234, 127, 127, 162, 162, 21, 21, 54, 54, 103, 103, 67, 67, 109, 109, 10},
+        {168, 6, 6, 197, 197, 195, 195, 5, 5, 4, 4, 1, 1, 19, 19, 94, 94, 2, 98, 97, 97, 2, 2, 326, 326, 327}
+    };
+    auto finite = [](const HiFacePointV1& point) { return std::isfinite(point.x) && std::isfinite(point.y); };
+    std::vector<Box> boxes; boxes.reserve(count);
     for (uint32_t i = 0; i < count; ++i) {
         const auto& face = faces[i];
         Box box{face.x, face.y, face.width, face.height, "Face " + score(face.confidence), false, {}};
-        for (const auto& point : face.landmarks) box.points.push_back(point);
-        if (face.mesh_valid && face.mesh) for (uint32_t j = 0; j < face.mesh_count; ++j) box.points.push_back({face.mesh[j].x, face.mesh[j].y});
         if (face.pose_valid) box.label += " yaw=" + score(face.yaw) + " pitch=" + score(face.pitch);
+        box.points.reserve(5);
+        for (const auto& point : face.landmarks) if (finite(point)) box.points.push_back(point);
+        if (face.mesh_valid && face.mesh) {
+            box.contours.reserve(121);
+            for (size_t group = 0; group < groups.size(); ++group) {
+                const auto& indices = groups[group];
+                const bool eye = group == 1 || group == 2;
+                float min_x = INFINITY, min_y = INFINITY, max_x = -INFINITY, max_y = -INFINITY;
+                if (eye) for (const auto index : indices) if (index < face.mesh_count) {
+                    const HiFacePointV1 point{face.mesh[index].x, face.mesh[index].y};
+                    if (!finite(point)) continue;
+                    min_x = std::min(min_x, point.x); min_y = std::min(min_y, point.y);
+                    max_x = std::max(max_x, point.x); max_y = std::max(max_y, point.y);
+                }
+                const float cx = (min_x + max_x) * .5f, cy = (min_y + max_y) * .5f;
+                for (size_t index = 0; index + 1 < indices.size(); index += 2) {
+                    const auto first = indices[index], second = indices[index + 1];
+                    if (first >= face.mesh_count || second >= face.mesh_count) continue;
+                    HiFacePointV1 start{face.mesh[first].x, face.mesh[first].y}, end{face.mesh[second].x, face.mesh[second].y};
+                    if (!finite(start) || !finite(end)) continue;
+                    if (eye) {
+                        if (!std::isfinite(cx) || !std::isfinite(cy)) continue;
+                        start = {cx + (start.x-cx)*1.4f, cy + (start.y-cy)*1.4f};
+                        end = {cx + (end.x-cx)*1.4f, cy + (end.y-cy)*1.4f};
+                    }
+                    box.contours.push_back({start,end});
+                }
+            }
+        }
         boxes.push_back(std::move(box));
     }
     return boxes;
 }
+namespace {
 bool imageExtension(std::filesystem::path file) {
     auto extension = file.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -61,16 +114,25 @@ FaceWorkflow::FaceWorkflow(const std::string& models, const std::string& databas
     : database_(database.c_str()), data_directory_(std::filesystem::path(database).has_parent_path()
         ? std::filesystem::path(database).parent_path() : std::filesystem::path(".")) {
     loadModels(session_, models);
+    const bool migrate_reference = !std::filesystem::exists(data_directory_ / "captured-faces.db");
+    captured_database_ = std::make_unique<Database>((data_directory_ / "captured-faces.db").c_str());
+    loadCapturedFaces();
     recount();
     try { settings_ = loadSettings((data_directory_ / "settings.conf").string()); }
     catch (const DemoError& error) { status = "Settings ignored: " + error.message; }
     const auto file = data_directory_ / "reference.hf1";
     if (std::filesystem::exists(file)) {
         try {
-            std::ifstream input(file); std::string space, id, text;
+            std::ifstream input(file); std::string space, id, text, source;
             std::getline(input, space); std::getline(input, id); std::getline(input, text);
             require(space == HIFACE_FEATURE_SPACE_ID && !id.empty() && id.size() <= HIFACE_SEARCH_MAX_TEXT_BYTES, "Reference feature space or ID mismatch");
             check(hiface_feature_decode_text_v1(text.c_str(), text.size(), reference_.data(), reference_.size()), "read saved reference");
+            std::getline(input, source); reference_from_captured_ = source == "captured";
+            if (migrate_reference) {
+                saveEntry(*captured_database_, {id, text, "", ""}, false); loadCapturedFaces();
+                atomicWrite(file.string(), space + '\n' + id + '\n' + text + "\ncaptured\n");
+                reference_from_captured_ = true;
+            }
             reference_id = id; has_reference_ = true;
         } catch (const DemoError& error) { status = "Reference ignored: " + error.message; }
     }
@@ -86,12 +148,45 @@ void FaceWorkflow::stop() {
     mode_ = 'D'; boxes.clear();
     if (enrollment_.pending()) aligned_preview.reset();
     enrollment_.clear();
+    pending_capture_kind_ = 0; duplicate_enrollment_id.clear(); result_pending_ = false;
+    action_step_ = 0; action_deadline_ = 0; action_prompt_ = false;
+}
+int FaceWorkflow::actionSecondsRemaining() const {
+    return action_prompt_ && action_deadline_ && !result_pending_ ? std::max<int64_t>(0, (action_deadline_ - monotonicMilliseconds() + 999) / 1000) : 0;
 }
 void FaceWorkflow::clearPageResults() {
     stop(); image_first.reset(); image_second.reset(); aligned_preview.reset(); image_matches.clear(); clearPhotoSearch(); inference_ms = 0;
+    comparison_first_ready = comparison_second_ready = false;
+    comparison_first_path.clear(); comparison_second_path.clear(); comparison_first_error.clear(); comparison_second_error.clear(); comparison_similarity.reset();
 }
-void FaceWorkflow::confirmEnrollment(const std::string& id, const std::string& group, const std::string& tag) {
-    enrollment_.save(database_, id, group, tag); recount(); status = "Enrollment confirmed: " + id;
+void FaceWorkflow::confirmEnrollment(const std::string& id, const std::string& group, const std::string& tag, bool overwrite) {
+    const bool capture = pending_capture_kind_ == 'C';
+    auto& target = capture ? *captured_database_ : database_;
+    if (!capture && !overwrite) {
+        uint32_t exists = 0; check(hiface_search_contains_v1(target.handle, id.c_str(), &exists), "check enrollment ID");
+        if (exists) { duplicate_enrollment_id = id; throw DemoError{"ALREADY_EXISTS: confirm replacing this Face ID"}; }
+    }
+    enrollment_.save(target, id, capture ? "" : group, capture ? "" : tag, capture || overwrite);
+    saved_capture_kind = pending_capture_kind_; ++saved_capture_generation;
+    pending_capture_kind_ = 0; duplicate_enrollment_id.clear();
+    if (capture) { loadCapturedFaces(); status = "Face ID and feature saved: " + id; }
+    else { recount(); status = "Enrollment confirmed: " + id; }
+}
+void FaceWorkflow::loadCapturedFaces() {
+    captured_faces.clear();
+    for (uint32_t offset = 0;; offset += 100) {
+        auto rows = listGallery(*captured_database_, "", "", offset, 100);
+        captured_faces.insert(captured_faces.end(), rows.begin(), rows.end());
+        if (rows.size() < 100) break;
+    }
+    std::sort(captured_faces.begin(), captured_faces.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+}
+void FaceWorkflow::selectCapturedReference(const std::string& id) {
+    const auto row = getEntry(*captured_database_, id); Feature feature{};
+    check(hiface_feature_decode_text_v1(row.feature.c_str(), row.feature.size(), feature.data(), feature.size()), "decode captured reference");
+    atomicWrite((data_directory_ / "reference.hf1").string(), std::string(HIFACE_FEATURE_SPACE_ID) + '\n' + row.id + '\n' + row.feature + "\ncaptured\n");
+    reference_ = feature; reference_id = row.id; has_reference_ = true; reference_from_captured_ = true; aligned_preview.reset();
+    status = "Reference selected: " + row.id;
 }
 void FaceWorkflow::pauseSearch() {
     require(mode_ == 'S' || mode_ == 'P', "Start search before pausing");
@@ -121,7 +216,7 @@ void FaceWorkflow::saveReference(const Feature& feature, const std::string& id) 
     Feature persisted{};
     check(hiface_feature_decode_text_v1(text.data(), HIFACE_FEATURE_TEXT_LENGTH, persisted.data(), persisted.size()), "decode saved reference");
     atomicWrite((data_directory_ / "reference.hf1").string(), std::string(HIFACE_FEATURE_SPACE_ID) + '\n' + id + '\n' + text.data() + '\n');
-    reference_ = persisted; reference_id = id; has_reference_ = true;
+    reference_ = persisted; reference_id = id; has_reference_ = true; reference_from_captured_ = false;
 }
 void FaceWorkflow::selectReference(const std::string& id) {
     require(id.find_first_of("\r\n") == std::string::npos, "Reference ID must be a single line");
@@ -131,11 +226,11 @@ void FaceWorkflow::selectReference(const std::string& id) {
     // Preserve the original Q7 text verbatim; do not quantize an existing HF1 again.
     // 原样保留 Q7 文本，不对已有 HF1 再次量化。
     atomicWrite((data_directory_ / "reference.hf1").string(), std::string(HIFACE_FEATURE_SPACE_ID) + '\n' + row.id + '\n' + row.feature + '\n');
-    reference_ = feature; reference_id = row.id; has_reference_ = true; aligned_preview.reset(); status = "Reference selected: " + id;
+    reference_ = feature; reference_id = row.id; has_reference_ = true; reference_from_captured_ = false; aligned_preview.reset(); status = "Reference selected: " + id;
 }
 void FaceWorkflow::clearReference() {
     stop(); std::filesystem::remove(data_directory_ / "reference.hf1");
-    std::fill(reference_.begin(), reference_.end(), 0); reference_id.clear(); has_reference_ = false;
+    std::fill(reference_.begin(), reference_.end(), 0); reference_id.clear(); has_reference_ = reference_from_captured_ = false;
     aligned_preview.reset(); status = "Verification reference cleared";
 }
 void FaceWorkflow::beginFlow(char mode) {
@@ -152,10 +247,11 @@ void FaceWorkflow::beginFlow(char mode) {
     config.frontal_hold_ms = mode == 'C' || mode == 'E' ? HIFACE_CAPTURE_FRONTAL_HOLD_MS : HIFACE_LIVENESS_FRONTAL_HOLD_MS;
     config.min_face_size_pixels = HIFACE_FLOW_DEFAULT_MIN_FACE_SIZE_PIXELS;
     config.verification_threshold = settings_.verification_threshold;
-    config.multiple_faces_allowed = (mode == 'L' || mode == 'V') && settings_.allow_multiple;
+    config.multiple_faces_allowed = mode == 'V' ? settings_.verification_allow_multiple : mode == 'L' && settings_.allow_multiple;
     if (mode == 'L' || mode == 'V') {
-        config.action_count = settings_.actions.size();
-        std::copy(settings_.actions.begin(), settings_.actions.end(), config.actions);
+        const auto actions = mode == 'V' ? (settings_.verification_random_actions ? randomActions(2) : settings_.verification_actions)
+                                         : (settings_.random_actions ? randomActions(3) : settings_.actions);
+        config.action_count = actions.size(); std::copy(actions.begin(), actions.end(), config.actions);
         config.action_timeout_ms = HIFACE_FLOW_DEFAULT_ACTION_TIMEOUT_MS;
         config.face_acquisition_timeout_ms = HIFACE_FLOW_DEFAULT_FACE_ACQUISITION_TIMEOUT_MS;
         config.face_lost_timeout_ms = HIFACE_FLOW_DEFAULT_FACE_LOST_TIMEOUT_MS;
@@ -193,51 +289,102 @@ void FaceWorkflow::finishFlow() {
     std::string message = outcome(result.outcome);
     if (result.flags & HIFACE_FLOW_RESULT_HAS_LIVENESS) message += " | liveness " + score(result.liveness_score);
     if (result.flags & HIFACE_FLOW_RESULT_HAS_SIMILARITY) message += " | similarity " + score(result.similarity);
+    if (finished_mode == 'V' && (result.flags & HIFACE_FLOW_RESULT_HAS_SIMILARITY)) {
+        std::ostringstream percent; percent << std::fixed << std::setprecision(2) << result.similarity * 100;
+        message = std::string(result.outcome == HIFACE_FLOW_OUTCOME_PASSED ? "Verification passed: " : "Verification failed: ")
+                + reference_id + " | similarity " + percent.str() + "%";
+    }
     if (result.flags & HIFACE_FLOW_RESULT_HAS_PREVIEW)
         aligned_preview = std::make_shared<Image>(Image{HIFACE_ALIGNED_PREVIEW_SIDE, HIFACE_ALIGNED_PREVIEW_SIDE, preview});
     if (result.outcome == HIFACE_FLOW_OUTCOME_PASSED && (finished_mode == 'C' || finished_mode == 'E')) {
         require(result.flags & HIFACE_FLOW_RESULT_HAS_FEATURE, "Capture returned no feature");
-        const auto id = finished_mode == 'E' && !enrollment_id_.empty() ? enrollment_id_ : uniqueId(finished_mode == 'E' ? "person-" : "capture-");
-        if (finished_mode == 'E') {
-            require(result.flags & HIFACE_FLOW_RESULT_HAS_PREVIEW, "Enrollment returned no aligned preview");
-            enrollment_.stage(feature); ++enrollment_generation_;
-            status = "Capture ready. Review the preview and confirm saving; nothing has been added yet.";
-            return;
-        } else {
-            if (result.flags & HIFACE_FLOW_RESULT_HAS_PREVIEW) {
-                const auto directory = data_directory_ / "captures"; std::filesystem::create_directories(directory);
-                savePreview((directory / (id + ".ppm")).string(), preview);
-            }
-            message = "Captured preview saved.";
-        }
-        try { saveReference(feature, id); message += " Reference saved."; }
-        catch (const DemoError& error) { message += " Reference was not saved: " + error.message; }
+        require(result.flags & HIFACE_FLOW_RESULT_HAS_PREVIEW, "Capture returned no aligned preview");
+        enrollment_.stage(feature); pending_capture_kind_ = finished_mode; ++enrollment_generation_;
+        status = "Capture ready. Review the preview and enter a Face ID before saving.";
+        return;
     }
     status = message;
+    if (finished_mode == 'C' || finished_mode == 'E' || finished_mode == 'L' || finished_mode == 'V') {
+        result_title = finished_mode == 'V' ? "1:1 Face Verification" : finished_mode == 'L' ? "Liveness" : "Face Capture";
+        result_pending_ = true; result_can_retry = true; ++flow_result_generation;
+    }
 }
-void FaceWorkflow::process(const CameraFrame& input) {
-    if (mode_ == 'P' || importing_ || enrollment_.pending()) return;
+void FaceWorkflow::showFlowError(char mode, const DemoError& error) {
+    stop(); status = error.message;
+    if (mode != 'C' && mode != 'E' && mode != 'L' && mode != 'V') return;
+    result_title = mode == 'V' ? "Unable to verify" : mode == 'L' ? "Unable to run liveness" : "Unable to capture a face";
+    result_can_retry = error.status != HIFACE_STATUS_INVALID_ARGUMENT &&
+        !(error.status >= HIFACE_STATUS_LICENSE_MISSING && error.status <= HIFACE_STATUS_LICENSE_CLOCK_INVALID);
+    result_pending_ = true; ++flow_result_generation;
+}
+void FaceWorkflow::previewComparisonPhoto(bool first, const std::string& path, const std::function<bool()>& cancelled) {
+    auto stopped = [&] { return cancelled && cancelled(); };
+    std::shared_ptr<Image> photo;
+    try { photo = std::make_shared<Image>(readImage(path.c_str())); }
+    catch (const DemoError& error) {
+        if (!stopped()) { (first ? comparison_first_error : comparison_second_error) = error.message; status = "Unable to read the image. Select it again."; }
+        return; // Android retains the previous photo/feature when the picker fails.
+    }
+    Feature feature{}; std::string failure;
+    try { feature = captureFeature(session_, *photo); }
+    catch (const DemoError& error) { failure = error.message; }
+    if (stopped()) return;
+    stop(); aligned_preview.reset(); image_matches.clear(); boxes.clear(); comparison_similarity.reset();
+    (first ? image_first : image_second) = std::move(photo);
+    (first ? comparison_first_ready : comparison_second_ready) = failure.empty();
+    (first ? comparison_first_path : comparison_second_path) = path;
+    (first ? comparison_first_error : comparison_second_error) = failure;
+    (first ? comparison_first_feature_ : comparison_second_feature_) = feature;
+    status = !failure.empty() ? failure : comparison_first_ready && comparison_second_ready ? "Photos ready. Click Compare." : "Photo ready. Choose the other photo.";
+}
+std::vector<Box> searchBoxes(const HiFaceSearchCameraResultV1& result, bool completed) {
+    std::vector<Box> boxes;
+    boxes.reserve(std::min<uint32_t>(result.face_count, HIFACE_SEARCH_MAX_FACES));
+    for (uint32_t i = 0; i < std::min<uint32_t>(result.face_count, HIFACE_SEARCH_MAX_FACES); ++i) {
+        const auto& face = result.faces[i];
+        if (!std::isfinite(face.x) || !std::isfinite(face.y) || !std::isfinite(face.width) ||
+            !std::isfinite(face.height) || face.width <= 0 || face.height <= 0) continue;
+        const bool rejected = completed && (result.end_reason == HIFACE_SEARCH_END_SPOOF_DETECTED ||
+            result.end_reason == HIFACE_SEARCH_END_TIMEOUT);
+        const bool matched = completed && result.end_reason == HIFACE_SEARCH_END_MATCH_FOUND &&
+            face.threshold_passed && face.face_id[0];
+        Box box{face.x, face.y, face.width, face.height, "Searching...", matched, {}};
+        box.search_mark = matched ? SearchMark::Matched : rejected ? SearchMark::Rejected : SearchMark::Pending;
+        if (result.progress == HIFACE_SEARCH_STAGE_EMPTY_GALLERY) box.label = "Empty gallery";
+        else if (result.progress == HIFACE_SEARCH_STAGE_FACE_TOO_SMALL) box.label = "Move closer";
+        if (completed && result.end_reason == HIFACE_SEARCH_END_SPOOF_DETECTED) box.label = "Liveness rejected";
+        else if (matched) box.label.assign(face.face_id, strnlen(face.face_id, sizeof(face.face_id)));
+        else if (rejected || (completed && face.has_similarity && !face.threshold_passed)) {
+            box.label = "Unknown"; box.search_mark = SearchMark::Rejected;
+        }
+        if (completed && face.has_similarity && std::isfinite(face.similarity)) box.label += " " + score(face.similarity);
+        box.points.reserve(HIFACE_FACE_LANDMARK_FLOAT_COUNT / 2);
+        for (size_t j = 0; j < HIFACE_FACE_LANDMARK_FLOAT_COUNT; j += 2)
+            if (std::isfinite(face.landmarks[j]) && std::isfinite(face.landmarks[j+1]))
+                box.points.push_back({face.landmarks[j], face.landmarks[j+1]});
+        boxes.push_back(std::move(box));
+    }
+    return boxes;
+}
+bool FaceWorkflow::process(const CameraFrame& input, const std::function<void(const std::vector<Box>&)>& detected) {
+    if (mode_ == 'P' || importing_ || enrollment_.pending() || result_pending_) return false;
     const auto begin = monotonicMilliseconds(); const auto frame = input.view();
     if (mode_ == 'S') {
         HiFaceSearchBatchHandle raw = nullptr;
         const auto prepared = hiface_session_search_prepare_yuv420_v1(session_.handle, database_.handle, &frame, begin, &raw);
-        if (prepared == HIFACE_STATUS_FRAME_SKIPPED) return;
+        if (prepared == HIFACE_STATUS_FRAME_SKIPPED) return false;
         check(prepared, "prepare camera search");
         std::unique_ptr<HiFaceSearchBatchOpaque, decltype(&hiface_search_batch_destroy_v1)> batch(raw, hiface_search_batch_destroy_v1);
+        if (detected) {
+            HiFaceSearchCameraResultV1 geometry{}; geometry.struct_size = sizeof(geometry);
+            check(hiface_search_batch_read_v1(raw, &geometry), "read search geometry");
+            detected(searchBoxes(geometry, false));
+        }
         check(hiface_search_batch_resolve_v1(raw, database_.handle), "resolve camera search");
         check(hiface_session_search_complete_v1(session_.handle, raw), "complete camera search");
         HiFaceSearchCameraResultV1 result{}; result.struct_size = sizeof(result);
         check(hiface_search_batch_read_v1(raw, &result), "read camera search");
-        boxes.clear();
-        for (uint32_t i = 0; i < result.face_count; ++i) {
-            const auto& face = result.faces[i];
-            std::string label = face.face_id[0] ? face.face_id : "Unknown";
-            if (face.has_similarity) label += " " + score(face.similarity);
-            Box box{face.x, face.y, face.width, face.height, label,
-                result.end_reason == HIFACE_SEARCH_END_MATCH_FOUND && face.threshold_passed != 0, {}};
-            for (size_t j = 0; j < HIFACE_FACE_LANDMARK_FLOAT_COUNT; j += 2) box.points.push_back({face.landmarks[j], face.landmarks[j + 1]});
-            boxes.push_back(std::move(box));
-        }
+        boxes = searchBoxes(result);
         switch (result.end_reason) {
             case HIFACE_SEARCH_END_MATCH_FOUND: status = "Match found"; break;
             case HIFACE_SEARCH_END_TIMEOUT: status = "No match: round timed out"; break;
@@ -257,19 +404,38 @@ void FaceWorkflow::process(const CameraFrame& input) {
         HiFaceDetectionRequestV1 request{sizeof(request), HIFACE_C_API_VERSION_V1, settings_.detection_faces, settings_.detailed ? 1u : 0u};
         HiFaceFlowEventV1 event{}; event.struct_size = sizeof(event);
         const auto processed = hiface_session_process_camera_yuv420_v1(session_.handle, &frame, &request, begin, &result, &event);
-        if (processed == HIFACE_STATUS_FRAME_SKIPPED) return;
+        if (processed == HIFACE_STATUS_FRAME_SKIPPED) return false;
         check(processed, "process camera frame"); boxes = detectionBoxes(faces.data(), result.count);
-        if (mode_ != 'D') {
+        // Core emits progress only when it changes. An empty event must not
+        // replace the current action/hold instruction with its default stage.
+        // Core 仅在进度变化时发送事件；空事件不能覆盖当前动作或保持姿态提示。
+        if (mode_ != 'D' && event.kind != HIFACE_FLOW_EVENT_NONE) {
             status = stage(event.stage);
-            if (event.has_action) status = "Action " + std::to_string(event.step_number) + "/" + std::to_string(event.step_count) + ": " + actionName(event.action);
+            if (event.has_action && event.stage == HIFACE_STAGE_PERFORM_ACTION) {
+                action_prompt_ = true;
+                if (event.step_number != action_step_) { action_step_ = event.step_number; action_deadline_ = begin + HIFACE_FLOW_DEFAULT_ACTION_TIMEOUT_MS; }
+                status = "Please " + std::string(actionInstruction(event.action)) + " (" + std::to_string(event.step_number) + "/" + std::to_string(event.step_count) + ")";
+            } else action_prompt_ = false;
             if (event.kind == HIFACE_FLOW_EVENT_ERROR) { stop(); check(event.flow_status, "face flow"); }
             else if (event.kind == HIFACE_FLOW_EVENT_RESULT_AVAILABLE) finishFlow();
         }
     }
     inference_ms = monotonicMilliseconds() - begin;
+    return true;
 }
 void FaceWorkflow::imageOperation(const std::string& operation, const std::string& first, const std::string& second,
         const std::string& id, const std::string& group, const std::string& tag) {
+    if (operation == "compare") {
+        if (comparison_first_path != first || !comparison_first_ready) previewComparisonPhoto(true, first);
+        if (comparison_second_path != second || !comparison_second_ready) previewComparisonPhoto(false, second);
+        require(comparison_first_ready && comparison_second_ready, "Choose two photos with valid face features before comparing");
+        float similarity = 0;
+        check(hiface_feature_compare_v1(comparison_first_feature_.data(), comparison_second_feature_.data(), comparison_first_feature_.size(), &similarity), "compare photos");
+        comparison_similarity = similarity;
+        std::ostringstream percent; percent << std::fixed << std::setprecision(2) << similarity * 100;
+        status = "Similarity " + percent.str() + "% (photo comparison; no liveness)";
+        return;
+    }
     require(!importing_, "Stop the import before processing an image"); stop();
     image_first.reset(); image_second.reset(); aligned_preview.reset(); image_matches.clear(); boxes.clear();
     image_first = std::make_shared<Image>(readImage(first.c_str()));
@@ -283,16 +449,11 @@ void FaceWorkflow::imageOperation(const std::string& operation, const std::strin
     std::vector<uint8_t> preview;
     const auto feature = captureFeature(session_, *image_first, &preview);
     aligned_preview = std::make_shared<Image>(Image{HIFACE_ALIGNED_PREVIEW_SIDE, HIFACE_ALIGNED_PREVIEW_SIDE, std::move(preview)});
-    if (operation == "compare") {
-        image_second = std::make_shared<Image>(readImage(second.c_str()));
-        const auto other = captureFeature(session_, *image_second);
-        float similarity = 0;
-        check(hiface_feature_compare_v1(feature.data(), other.data(), feature.size(), &similarity), "compare photos");
-        status = std::string(similarity >= settings_.verification_threshold ? "Matched" : "Not matched") + " | similarity " + score(similarity) + " (photo comparison; no liveness)";
-    } else if (operation == "reference") {
-        saveReference(feature, id.empty() ? uniqueId("photo-") : id); status = "Photo reference saved: " + reference_id;
+    if (operation == "reference") {
+        enrollment_.stage(feature); pending_capture_kind_ = 'C'; ++enrollment_generation_;
+        status = "Review the photo and enter a Face ID before saving.";
     } else if (operation == "enroll") {
-        enrollment_.stage(feature); ++enrollment_generation_;
+        enrollment_.stage(feature); pending_capture_kind_ = 'E'; ++enrollment_generation_;
         status = "Photo capture ready. Review the preview and confirm saving; nothing has been added yet.";
     } else if (operation == "search") {
         HiFaceSearchResultsHandle raw = nullptr;
@@ -319,21 +480,31 @@ void FaceWorkflow::searchPhoto(const std::string& path, const std::function<bool
     inference_ms = monotonicMilliseconds() - begin;
     status = photoSearchSummary();
 }
-void FaceWorkflow::loadGallery(uint32_t offset, const std::string& id, const std::string& group, const std::string& tag) {
-    gallery_offset = offset;
+void FaceWorkflow::loadGallery(uint32_t offset, const std::string& id, const std::string& group, const std::string& tag, bool append) {
     check(hiface_search_count_v1(database_.handle, group.c_str(), tag.c_str(), &filtered_count), "count filtered gallery");
-    recount(); gallery_rows.clear();
-    if (id.empty()) gallery_rows = listGallery(database_, group, tag, offset, 10);
+    recount(); std::vector<GalleryEntry> loaded;
+    if (id.empty()) loaded = listGallery(database_, group, tag, offset, 100);
     else {
         uint32_t exists = 0; check(hiface_search_contains_v1(database_.handle, id.c_str(), &exists), "find face ID");
-        if (exists) gallery_rows.push_back(getEntry(database_, id));
+        if (exists) loaded.push_back(getEntry(database_, id));
+    }
+    gallery_next_offset = offset + static_cast<uint32_t>(loaded.size());
+    gallery_has_more = id.empty() && !loaded.empty() && gallery_next_offset < filtered_count;
+    if (!append || !id.empty()) { gallery_rows = std::move(loaded); gallery_offset = offset; }
+    else {
+        std::unordered_map<std::string,size_t> indices;indices.reserve(gallery_rows.size()+loaded.size());
+        for(size_t i=0;i<gallery_rows.size();++i)indices.emplace(gallery_rows[i].id,i);
+        for(auto& row:loaded) {
+            const auto at=indices.emplace(row.id,gallery_rows.size());
+            if(at.second)gallery_rows.push_back(std::move(row));else gallery_rows[at.first->second]=std::move(row);
+        }
     }
     if (!importing_) status = id.empty() ? "Gallery loaded" : gallery_rows.empty() ? "Face ID not found" : "Face ID found";
 }
 void FaceWorkflow::deleteEntry(const std::string& id) {
     require(!importing_, "Stop import before deleting a face");
     uint64_t deleted = 0; check(hiface_search_delete_v1(database_.handle, id.c_str(), &deleted), "delete face ID"); recount();
-    if (id == reference_id) clearReference();
+    if (id == reference_id && !reference_from_captured_) clearReference();
     status = deleted ? "Deleted " + id : "Face ID not found";
 }
 void FaceWorkflow::updateEntry(const std::string& id, const std::string& group, const std::string& tag) {

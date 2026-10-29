@@ -20,18 +20,19 @@ int environmentInteger(const char* name, int fallback, int low, int high) {
     const long parsed = std::strtol(value, &end, 10);
     return end && !*end && parsed >= low && parsed <= high ? static_cast<int>(parsed) : fallback;
 }
-std::vector<Box> previewBoxes(const std::vector<Box>& source, const CameraFrame* analysis,
+std::vector<Box> previewBoxes(const std::vector<Box>& source, int analysis_width, int analysis_height,
                               const CameraFrame* preview) {
-    if (!analysis || !preview ||
-        (analysis->width == preview->width && analysis->height == preview->height))
+    if (analysis_width <= 0 || analysis_height <= 0 || !preview ||
+        (analysis_width == preview->width && analysis_height == preview->height))
         return source;
-    const float x_scale = float(preview->width) / analysis->width;
-    const float y_scale = float(preview->height) / analysis->height;
+    const float x_scale = float(preview->width) / analysis_width;
+    const float y_scale = float(preview->height) / analysis_height;
     auto mapped = source;
     for (auto& box : mapped) {
         box.x *= x_scale; box.width *= x_scale;
         box.y *= y_scale; box.height *= y_scale;
         for (auto& point : box.points) { point.x *= x_scale; point.y *= y_scale; }
+        for (auto& line : box.contours) for (auto& point : line) { point.x *= x_scale; point.y *= y_scale; }
     }
     return mapped;
 }
@@ -49,6 +50,21 @@ DesktopApp::~DesktopApp() {
 void DesktopApp::post(Command command) {
     std::lock_guard<std::mutex> lock(mutex_);
     work_changed_.notify_one();
+    if (command.type == "preview-photo") {
+        const int slot = command.values.at(0) == "first" ? 0 : 1;
+        command.request_id = ++comparison_generations_[slot];
+        commands_.erase(std::remove_if(commands_.begin(), commands_.end(), [&](const Command& queued) {
+            return queued.type == "preview-photo" && queued.values.at(0) == command.values.at(0);
+        }), commands_.end());
+        auto pending = std::make_shared<ViewState>(*state_); pending->busy = true; pending->comparison_similarity.reset();
+        (slot == 0 ? pending->comparison_first_processing : pending->comparison_second_processing) = true;
+        pending->visual_revision = ++visual_revision_; state_ = std::move(pending);
+        commands_.push_back(std::move(command)); return;
+    }
+    if (command.type == "page") {
+        ++comparison_generations_[0]; ++comparison_generations_[1];
+        commands_.erase(std::remove_if(commands_.begin(), commands_.end(), [](const Command& queued) { return queued.type == "preview-photo"; }), commands_.end());
+    }
     if (command.type == "image-search" || command.type == "cancel-image-search") {
         command.request_id = ++photo_generation_;
         commands_.erase(std::remove_if(commands_.begin(), commands_.end(), [](const Command& queued) { return queued.type == "image-search" || queued.type == "cancel-image-search"; }), commands_.end());
@@ -77,6 +93,13 @@ std::shared_ptr<const ViewState> DesktopApp::snapshot() {
         view->fps = capture_state_.fps;
         view->preview_sequence = capture_state_.sequence;
         view->lighting = capture_state_.lighting;
+        if (!capture_state_.ready || !view->overlayFresh(monotonicMilliseconds(), capture_state_.last_frame_ms, capture_request_.generation, view->frame.get())) {
+            view->camera_boxes.reset(); view->boxes.clear();
+            if (view->mode == 'S' && !view->failed && !view->busy && view->overlay_frame_ms > 0) {
+                view->analysis_fps = 0;
+                view->status = "Waiting for fresh camera analysis...";
+            }
+        }
         if (!capture_state_.error.empty()) {
             view->failed = true;
             view->status = capture_state_.error;
@@ -132,6 +155,7 @@ void DesktopApp::captureLoop() {
             camera.close();
             preview_camera.close();
             CaptureState next;
+            next.generation = request.generation;
             next.active = request.open;
             next.last_frame_ms = next.last_analysis_ms = monotonicMilliseconds();
             fps_start = next.last_frame_ms;
@@ -327,34 +351,58 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
         FaceWorkflow workflow(models, database);
         bool failed = false;
         uint64_t settings_attempt = 0, photo_generation = 0;
+        uint64_t enrollment_attempt = 0;
+        uint64_t metadata_attempt = 0, gallery_attempt = 0, gallery_revision = 0;
+        uint64_t comparison_completed[2]{};
         std::string page = "home", gallery_id, gallery_group, gallery_tag;
+        // Android keeps the photo-search Activity beneath library management.
+        // Retain its immutable result only while that child page is open.
+        // 与 Android 一样，仅在人脸库子页打开期间保留图片搜索页的不可变结果。
+        std::shared_ptr<Image> suspended_photo;
+        std::shared_ptr<const ImageSearchReport> suspended_report;
+        std::string suspended_photo_path;
+        double suspended_photo_ms = 0;
         uint32_t gallery_offset = 0;
         int next_index = 0;
         int64_t analysis_fps_start = monotonicMilliseconds(), next_analysis = analysis_fps_start, last_publish = 0;
         uint64_t analyzed_sequence = 0;
         uint32_t analysis_frames = 0;
         double analysis_fps = 0;
+        int overlay_width = 0, overlay_height = 0;
+        int64_t overlay_frame_ms = 0;
+        uint64_t overlay_generation = 0;
         if (device.rfind("/dev/video", 0) == 0) try { next_index = std::stoi(device.substr(10)); } catch (...) {}
-        auto connect = [&] {
-            workflow.clearPageResults();
+        auto connect = [&](bool reset_flow = true) {
+            if (reset_flow) workflow.clearPageResults();
             configureCapture(device, workflow.settings(), true);
             analyzed_sequence = 0;
+            overlay_frame_ms = 0;
             analysis_fps_start = next_analysis = monotonicMilliseconds();
             analysis_frames = 0;
             analysis_fps = 0;
-            workflow.status = "Camera connected. Look at the camera.";
+            if (reset_flow) workflow.status = "Camera connected. Look at the camera.";
         };
         workflow.status = "Choose a feature from Home to begin.";
-        auto gallery = [&] { workflow.loadGallery(gallery_offset, gallery_id, gallery_group, gallery_tag); };
+        auto gallery = [&](bool append = false) {
+            ++gallery_attempt;
+            if (!append) { ++gallery_revision; gallery_offset = 0; }
+            workflow.loadGallery(gallery_offset, gallery_id, gallery_group, gallery_tag, append);
+        };
         while (!stopping_) {
             std::vector<Command> commands;
             { std::lock_guard<std::mutex> lock(mutex_); commands.swap(commands_); }
             bool workflow_updated = !commands.empty();
             for (const auto& command : commands) {
+                if(command.type=="gallery-more" && (page!="gallery" || workflow.importing())){++gallery_attempt;continue;}
+                const bool comparison_command = command.type == "preview-photo";
+                const int comparison_slot = comparison_command && command.values.at(0) == "second" ? 1 : 0;
+                if (comparison_command && command.request_id != comparison_generations_[comparison_slot]) continue;
                 const bool photo_command = command.type == "image-search" || command.type == "cancel-image-search";
                 if (photo_command && command.request_id != photo_generation_) continue;
                 if (photo_command) photo_generation = command.request_id;
                 if (command.type == "settings") ++settings_attempt;
+                if (command.type == "confirm-enrollment") ++enrollment_attempt;
+                if (command.type == "metadata") ++metadata_attempt;
                 auto working = std::make_shared<ViewState>(*snapshot());
                 working->busy = true; working->failed = false; working->status = command.type == "image-search" ? "Detecting and searching every face..." : command.type == "image" ? "Processing photo" : command.type == "import" ? "Reading import source" : "Applying request";
                 publish(working);
@@ -365,33 +413,65 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
                         "Stop the import before another operation");
                     if (command.type == "page") {
                         require(v.at(0) == "home" || demoPage(v.at(0)), "Unknown feature page");
+                        if(page=="gallery" && v.at(0)!="gallery") {
+                            workflow.gallery_rows.clear();workflow.gallery_has_more=false;workflow.gallery_next_offset=0;
+                        }
+                        const bool returning_to_photo = page == "gallery" && v.at(0) == "image-search";
+                        if (page == "image-search" && v.at(0) == "gallery") {
+                            suspended_photo = workflow.search_photo; suspended_report = workflow.photo_search;
+                            suspended_photo_path = workflow.search_photo_path; suspended_photo_ms = workflow.inference_ms;
+                        } else if (!returning_to_photo) {
+                            suspended_photo.reset(); suspended_report.reset(); suspended_photo_path.clear();
+                        }
                         workflow.clearPageResults(); page = v.at(0); analysis_fps = 0; analysis_frames = 0;
-                        if (cameraPage(page)) connect(); else configureCapture(device, workflow.settings(), false);
-                        if (page == "gallery") gallery();
+                        comparison_completed[0] = comparison_generations_[0]; comparison_completed[1] = comparison_generations_[1];
+                        if (returning_to_photo) {
+                            workflow.search_photo = std::move(suspended_photo); workflow.photo_search = std::move(suspended_report);
+                            workflow.search_photo_path = std::move(suspended_photo_path); workflow.inference_ms = suspended_photo_ms;
+                        }
+                        if (cameraPage(page)) {
+                            connect();
+                            const auto mode = demoPage(page)->camera_mode;
+                            if (mode != 'D') workflow.action(mode);
+                        } else configureCapture(device, workflow.settings(), false);
+                        if (page == "gallery") {
+                            gallery_offset = 0; gallery_id.clear(); gallery_group.clear(); gallery_tag.clear(); gallery();
+                        }
+                        if (page == "references") { workflow.loadCapturedFaces(); workflow.status = "Select a captured Face ID to verify."; }
                         if (page == "image-search") workflow.status = workflow.photoSearchSummary();
-                        if (page == "camera-settings") workflow.status = "Camera preferences only: apply to save, then open a camera feature. No camera or analysis is running.";
+                        if (page == "camera-settings") workflow.status = "Camera preferences save automatically. Open a camera feature to use them.";
                         if (page == "home") workflow.status = "Choose a feature from Home to begin.";
                         if (page == "images") workflow.status = "Choose two photos to compare. Photo comparison does not perform liveness.";
-                        if (page == "settings") workflow.status = "Edit detection, flow and search preferences, then apply to save.";
+                        if (page == "settings") workflow.status = "Edit this feature's settings, apply to save, then go back.";
                     } else if (command.type == "image-search") {
                         page = "image-search"; configureCapture(device, workflow.settings(), false);
                         workflow.searchPhoto(v.at(0), [&] { return stopping_ || command.request_id != photo_generation_; });
                     } else if (command.type == "cancel-image-search") { workflow.clearPhotoSearch(); workflow.status = "Photo search cancelled.";
                     } else if (command.type == "action") {
-                        require(captureSnapshot().ready, "Connect a camera first"); workflow.action(v.at(0).at(0));
-                    } else if (command.type == "connect") { device = v.at(0); connect(); }
+                        if (!captureSnapshot().ready) connect();
+                        workflow.action(v.at(0).at(0));
+                    } else if (command.type == "connect") { device = v.at(0); connect(false); }
                     else if (command.type == "next") {
                         bool connected = false;
                         for (int i = 0; i < 64; ++i) {
                             next_index = (next_index + 1) % 64; device = "/dev/video" + std::to_string(next_index);
                             if (!std::filesystem::exists(device)) continue;
-                            try { connect(); connected = true; break; } catch (const DemoError&) {}
+                            try { connect(false); connected = true; break; } catch (const DemoError&) {}
                         }
                         if (!connected) workflow.status = "No usable camera. Connect the USB device to Ubuntu and check /dev/video* permissions.";
                     } else if (command.type == "mirror") workflow.toggleMirror();
-                    else if (command.type == "pause") workflow.pauseSearch();
+                    else if (command.type == "pause") {
+                        workflow.pauseSearch(); overlay_frame_ms = 0;
+                        analysis_fps = 0; analysis_frames = 0;
+                        analysis_fps_start = next_analysis = monotonicMilliseconds();
+                    }
                     else if (command.type == "settings") { workflow.applySettings(parseSettings(command.fields)); }
-                    else if (command.type == "confirm-enrollment") { workflow.confirmEnrollment(v.at(0), v.at(1), v.at(2)); }
+                    else if (command.type == "confirm-enrollment") { workflow.confirmEnrollment(v.at(0), v.at(1), v.at(2), v.size() > 3 && v.at(3) == "replace"); }
+                    else if (command.type == "capture-reference") workflow.selectCapturedReference(v.at(0));
+                    else if (command.type == "preview-photo") {
+                        workflow.previewComparisonPhoto(comparison_slot == 0, v.at(1), [&] { return stopping_ || command.request_id != comparison_generations_[comparison_slot]; });
+                        comparison_completed[comparison_slot] = command.request_id;
+                    }
                     else if (command.type == "enroll") {
                         require(captureSnapshot().ready, "Connect a camera first"); workflow.setEnrollment(v.at(0), v.at(1), v.at(2)); workflow.action('E');
                     } else if (command.type == "image") {
@@ -400,14 +480,25 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
                     }
                     else if (command.type == "gallery") {
                         gallery_offset = static_cast<uint32_t>(std::stoul(v.at(0))); gallery_id = v.at(1); gallery_group = v.at(2); gallery_tag = v.at(3); gallery();
-                    } else if (command.type == "delete") { workflow.deleteEntry(v.at(0)); gallery(); workflow.status = "Deleted " + v.at(0); }
-                    else if (command.type == "metadata") { workflow.updateEntry(v.at(0), v.at(1), v.at(2)); gallery(); }
+                    } else if (command.type == "gallery-more") {
+                        if (page == "gallery" && gallery_id.empty() && workflow.gallery_has_more &&
+                            std::stoull(v.at(1)) == gallery_revision && std::stoul(v.at(0)) == workflow.gallery_next_offset) {
+                            gallery_offset = workflow.gallery_next_offset; gallery(true);
+                        } else ++gallery_attempt;
+                    } else if (command.type == "delete") { workflow.deleteEntry(v.at(0));const auto result=workflow.status;gallery();workflow.status=result; }
+                    else if (command.type == "metadata") { workflow.updateEntry(v.at(0), v.at(1), v.at(2));const auto result=workflow.status;gallery();workflow.status=result; }
                     else if (command.type == "reference") workflow.selectReference(v.at(0));
                     else if (command.type == "clear-reference") workflow.clearReference();
                     else if (command.type == "export") workflow.exportGallery(v.at(0), gallery_group, gallery_tag);
                     else if (command.type == "import") workflow.startImport(v.at(0), v.at(1) == "images", v.at(2));
                     else if (command.type == "cancel-import") { workflow.cancelImport(); const auto status = workflow.status; gallery(); workflow.status = status; }
-                } catch (const DemoError& error) { failed = true; workflow.status = error.message; std::fprintf(stderr, "[Demo] %s\n", error.message.c_str()); }
+                } catch (const DemoError& error) {
+                    failed = true; workflow.status = error.message;
+                    if (command.type == "action" && !command.values.empty()) workflow.showFlowError(command.values[0][0], error);
+                    if (command.type == "page" && !command.values.empty() && cameraPage(command.values[0]))
+                        workflow.showFlowError(demoPage(command.values[0])->camera_mode, error);
+                    std::fprintf(stderr, "[Demo] %s\n", error.message.c_str());
+                }
                 catch (const std::exception& error) { failed = true; workflow.status = error.what(); }
                 catch (...) { failed = true; workflow.status = "Unexpected command failure"; }
             }
@@ -418,25 +509,42 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
                 } catch (const DemoError& error) { failed = true; workflow.status += " | " + error.message; }
                 catch (const std::exception& error) { failed = true; workflow.cancelImport(); workflow.status = error.what(); }
             }
-            if (cameraPage(page) && !workflow.importing() && !workflow.pendingEnrollment()) {
+            const bool analyze = cameraPage(page) && workflow.mode() != 'P' && !workflow.importing() && !workflow.pendingEnrollment() && !workflow.resultPending();
+            if (analyze) {
                 const auto latest = captureSnapshot();
                 const auto now = monotonicMilliseconds();
                 if (!latest.error.empty()) {
                     failed = true;
-                    workflow.stop();
-                    workflow.status = latest.error;
+                    workflow.showFlowError(workflow.mode(), DemoError{latest.error});
                 } else if (latest.ready && latest.analysis_frame && latest.analysis_sequence != analyzed_sequence && now >= next_analysis) {
                     analyzed_sequence = latest.analysis_sequence;
                     const auto begin = now;
-                    if (workflow.mode() != 'P') {
-                        try { workflow.process(*latest.analysis_frame); }
-                        catch (const DemoError& error) { failed = true; workflow.stop(); workflow.status = error.message; }
-                        ++analysis_frames; workflow_updated = true;
+                    const char active_mode = workflow.mode();
+                    try {
+                        const bool processed = workflow.process(*latest.analysis_frame, [&](const std::vector<Box>& geometry) {
+                            auto pending = std::make_shared<ViewState>(*snapshot());
+                            pending->camera_boxes = std::make_shared<const std::vector<Box>>(previewBoxes(geometry,
+                                latest.analysis_frame->width, latest.analysis_frame->height, pending->frame.get()));
+                            pending->boxes.clear(); pending->overlay_frame_ms = latest.last_analysis_ms;
+                            pending->overlay_capture_generation = latest.generation;
+                            pending->overlay_preview_width = pending->frame ? pending->frame->width : 0;
+                            pending->overlay_preview_height = pending->frame ? pending->frame->height : 0;
+                            pending->status = geometry.empty() ? "Waiting for a face" : "Searching...";
+                            publish(pending);
+                        });
+                        if (processed) {
+                            ++analysis_frames;
+                            overlay_width = latest.analysis_frame->width; overlay_height = latest.analysis_frame->height;
+                            overlay_frame_ms = latest.last_analysis_ms; overlay_generation = latest.generation;
+                        }
+                    } catch (const DemoError& error) {
+                        failed = true; overlay_frame_ms = 0; workflow.showFlowError(active_mode, error);
                     }
+                    workflow_updated = true;
                     next_analysis = begin + kAnalysisIntervalMs;
                 }
             }
-            if (workflow.pendingEnrollment()) { analysis_fps = 0; analysis_frames = 0; }
+            if (!analyze || workflow.pendingEnrollment() || workflow.resultPending()) { analysis_fps = 0; analysis_frames = 0; }
             const auto now = monotonicMilliseconds();
             if (now - analysis_fps_start >= 1000) {
                 analysis_fps = analysis_frames * 1000.0 / std::max<int64_t>(1, now - analysis_fps_start);
@@ -452,6 +560,21 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
                 auto state = std::make_shared<ViewState>();
                 state->ready = true; state->importing = workflow.importing(); state->connected = capture.ready;
                 state->pending_enrollment = workflow.pendingEnrollment(); state->enrollment_generation = workflow.enrollmentGeneration();
+                state->pending_capture_kind = workflow.pendingCaptureKind(); state->captured_faces = workflow.captured_faces;
+                state->enrollment_attempt = enrollment_attempt;
+                state->metadata_attempt = metadata_attempt; state->gallery_attempt = gallery_attempt; state->gallery_revision = gallery_revision;
+                state->gallery_next_offset = workflow.gallery_next_offset; state->gallery_has_more = workflow.gallery_has_more; state->gallery_query_id = gallery_id;
+                state->saved_capture_generation = workflow.saved_capture_generation; state->saved_capture_kind = workflow.saved_capture_kind;
+                state->duplicate_enrollment_id = workflow.duplicate_enrollment_id;
+                state->flow_result_pending = workflow.resultPending(); state->flow_result_generation = workflow.flow_result_generation; state->result_title = workflow.result_title;
+                state->flow_result_can_retry = workflow.result_can_retry;
+                state->action_seconds_remaining = workflow.actionSecondsRemaining();
+                state->comparison_first_processing = comparison_completed[0] != comparison_generations_[0];
+                state->comparison_second_processing = comparison_completed[1] != comparison_generations_[1];
+                state->comparison_first_ready = workflow.comparison_first_ready && !state->comparison_first_processing;
+                state->comparison_second_ready = workflow.comparison_second_ready && !state->comparison_second_processing;
+                state->comparison_first_error = workflow.comparison_first_error; state->comparison_second_error = workflow.comparison_second_error;
+                state->comparison_similarity = state->comparison_first_processing || state->comparison_second_processing ? std::nullopt : workflow.comparison_similarity;
                 state->failed = failed; state->settings_attempt = settings_attempt;
                 state->photo_search_generation = photo_generation;
                 state->search_photo = workflow.search_photo; state->photo_search = workflow.photo_search; state->search_photo_path = workflow.search_photo_path;
@@ -465,8 +588,13 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
                 state->preview_sequence = capture.sequence;
                 if (cameraPage(page) && capture.ready && now - capture.last_frame_ms > 3000)
                     state->status = "Camera is connected but no frames arrived for 3 seconds. Check VMware USB passthrough or reconnect.";
-                state->boxes = previewBoxes(workflow.boxes, capture.analysis_frame.get(), capture.frame.get());
-                if (cameraPage(page) && (now - capture.last_frame_ms > 500 || state->mode == 'P')) state->boxes.clear();
+                if (cameraPage(page)) {
+                    state->overlay_frame_ms = overlay_frame_ms; state->overlay_capture_generation = overlay_generation;
+                    state->overlay_preview_width = capture.frame ? capture.frame->width : 0;
+                    state->overlay_preview_height = capture.frame ? capture.frame->height : 0;
+                    if (capture.ready && state->mode != 'P' && state->overlayFresh(monotonicMilliseconds(), capture.last_frame_ms, capture.generation))
+                        state->camera_boxes = std::make_shared<const std::vector<Box>>(previewBoxes(workflow.boxes, overlay_width, overlay_height, capture.frame.get()));
+                } else state->boxes = workflow.boxes;
                 state->gallery = workflow.gallery_rows; state->image_first = workflow.image_first; state->image_second = workflow.image_second; state->aligned_preview = workflow.aligned_preview;
                 state->image_matches = workflow.image_matches;
                 publish(state); last_publish = now;
@@ -475,10 +603,10 @@ void DesktopApp::run(const std::string& models, const std::string& database, std
             else {
                 std::unique_lock<std::mutex> lock(mutex_);
                 auto deadline = last_publish + 1000;
-                if (cameraPage(page) && !workflow.pendingEnrollment() && capture_state_.ready && capture_state_.analysis_frame && capture_state_.analysis_sequence != analyzed_sequence)
+                if (analyze && capture_state_.ready && capture_state_.analysis_frame && capture_state_.analysis_sequence != analyzed_sequence)
                     deadline = std::min(deadline, std::max(now + 1, next_analysis));
                 work_changed_.wait_for(lock, std::chrono::milliseconds(std::max<int64_t>(1, deadline - now)), [&] {
-                    return stopping_ || !commands_.empty() || (cameraPage(page) && !workflow.pendingEnrollment() && capture_state_.ready &&
+                    return stopping_ || !commands_.empty() || (analyze && !workflow.pendingEnrollment() && !workflow.resultPending() && capture_state_.ready &&
                         capture_state_.analysis_sequence != analyzed_sequence && monotonicMilliseconds() >= next_analysis);
                 });
             }

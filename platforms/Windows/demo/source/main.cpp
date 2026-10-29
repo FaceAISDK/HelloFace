@@ -28,7 +28,9 @@ enum Control {
     Actions, CustomActions, Multiple, StartFlow, Enroll, Cancel, Pause, PickA, PickB, Compare,
     ImageReference, GalleryReference, ImportReference, ExportFeature, ExportPreview, ImageEnroll,
     RefreshGallery, PreviousPage, NextPage, DeletePerson, UpdatePerson, ImportJson, ExportJson,
-    ImportImages, PickSearchImage, SearchImageAgain, GoGallery, SearchGuide, SaveEnrollment, ReleaseMemory, People, Status, Metrics, Primary, ParameterPane = 5000, NavBase = 6000, HomeBase = 7000
+    ImportImages, PickSearchImage, SearchImageAgain, GoGallery, SearchGuide, SaveEnrollment, ReleaseMemory, People, Status, Metrics, Primary,
+    Back = kBackControl, Parameters = kParametersControl, HomePrevious = kHomePreviousControl, HomeNext = kHomeNextControl,
+    ParameterPane = 5000, NavBase = 6000, HomeBase = 7000
 };
 constexpr int kLabelOffset = 1000;
 RECT workingArea(HWND window) {
@@ -52,13 +54,17 @@ struct Ui {
     uint64_t pending_command = 0, search_request_generation = 0;
     bool creating = true, dirty = false, rendering_list = false;
     Page page = Page::Home;
+    PageHistory history;
+    bool parameters_open = false;
+    int home_scroll = 0;
+    uint64_t return_after_save = 0, return_after_reference = 0;
     unsigned initial_camera = 0;
     uint64_t rendered_gallery = UINT64_MAX;
     uint32_t rendered_offset = UINT32_MAX;
     std::vector<Person> rendered_people;
     std::array<Draft, kPageCount> drafts;
     std::wstring parameter_notice;
-    int card_top = 160, main_left = 180, parameter_width = 296;
+    int card_top = 160, main_left = 24, parameter_width = 296;
 };
 HWND child(HWND window, int id) {
     if (const auto direct = GetDlgItem(window, id)) return direct;
@@ -228,115 +234,122 @@ const wchar_t* primaryTitle(Page page) {
         default: return L"选择图片并检测";
     }
 }
+HomeLayout homeGeometry(const Ui& ui) {
+    RECT client{}; GetClientRect(ui.app.window,&client);
+    return {MulDiv(client.right,96,ui.theme.dpi),MulDiv(client.bottom,96,ui.theme.dpi),kFeatureCount};
+}
 void layout(Ui& ui) {
     if (!ui.pane) return;
-    const auto window = ui.app.window; RECT client{}; GetClientRect(window, &client);
-    const int width = MulDiv(client.right, 96, ui.theme.dpi), height = MulDiv(client.bottom, 96, ui.theme.dpi);
-    auto px = [&](int value) { return ui.theme.px(value); };
-    auto rect = [&](int x, int y, int w, int h) { return RECT{px(x), px(y), px(x + w), px(y + h)}; };
-    auto move = [&](int id, int x, int y, int w, int h = 34) { MoveWindow(child(window, id), px(x), px(y), px(w), px(h), TRUE); };
-    ui.main_left = width < 1000 ? 164 : 180;
-    ui.parameter_width = width < 1100 ? 260 : 296;
-    for (int i = 0; i < kPageCount; ++i) {
-        const auto area = navigationItem(height, ui.main_left, kPageCount, i);
-        move(NavBase + static_cast<int>(navigation_pages[i]), area.left, area.top, area.width(), area.height());
-    }
-    move(Logs, width - 370, 22, 90); move(Help, width - 270, 22, 250);
-    const bool home = ui.page == Page::Home;
-    const bool camera_settings = ui.page == Page::CameraSettings;
-    for (int i = 0; i < kFeatureCount; ++i) ShowWindow(child(window, HomeBase + i), home ? SW_SHOW : SW_HIDE);
-    ShowWindow(ui.pane, home || camera_settings ? SW_HIDE : SW_SHOW);
-    ShowWindow(child(window, Primary), home || camera_settings ? SW_HIDE : SW_SHOW);
-    ShowWindow(child(window, Cancel), home ? SW_HIDE : SW_SHOW);
-    if (home) {
-        for (int id = PersonId; id <= ReleaseMemory; ++id) ShowWindow(child(window, id), SW_HIDE);
-        for (const int id : {Device, RefreshDevices, Open, Close, Resolution, Rotation, Mirror, Apply, People}) ShowWindow(child(window, id), SW_HIDE);
-        for (int i = 0; i < kFeatureCount; ++i) {
-            const auto card = homeCard(width, height, ui.main_left, kFeatureCount, i);
-            move(HomeBase + i, card.left, card.top, card.width(), card.height());
+    const auto window=ui.app.window; RECT client{};GetClientRect(window,&client);
+    const int width=MulDiv(client.right,96,ui.theme.dpi),height=MulDiv(client.bottom,96,ui.theme.dpi);
+    auto px=[&](int value){return ui.theme.px(value);};
+    auto rect=[&](int x,int y,int w,int h){return RECT{px(x),px(y),px(x+w),px(y+h)};};
+    auto move=[&](int id,int x,int y,int w,int h=34){MoveWindow(child(window,id),px(x),px(y),px(w),px(h),TRUE);};
+    ui.main_left=24;ui.parameter_width=width<1100?260:296;
+    const bool home=ui.page==Page::Home,camera_settings=ui.page==Page::CameraSettings;
+    const bool pane_visible=!home&&!camera_settings&&ui.page!=Page::ImageSearch&&(!hasFeatureParameters(ui.page)||ui.parameters_open);
+    move(Back,24,22,86);ShowWindow(child(window,Back),home?SW_HIDE:SW_SHOW);
+    move(Logs,width-370,22,90);move(Help,width-270,22,250);
+    ShowWindow(ui.pane,pane_visible?SW_SHOW:SW_HIDE);
+    ShowWindow(child(window,Primary),home||camera_settings?SW_HIDE:SW_SHOW);
+    ShowWindow(child(window,Cancel),home||camera_settings?SW_HIDE:SW_SHOW);
+    for(int id=PersonId;id<=ReleaseMemory;++id){ShowWindow(child(window,id),SW_HIDE);ShowWindow(child(window,id+kLabelOffset),SW_HIDE);}
+    for(int id:{Device,RefreshDevices,Open,Close,Resolution,Rotation,Mirror,Apply,People,Enroll,GoGallery,Parameters,SearchImageAgain,HomePrevious,HomeNext})ShowWindow(child(window,id),SW_HIDE);
+    for(int i=0;i<kFeatureCount;++i)ShowWindow(child(window,HomeBase+i),SW_HIDE);
+    move(Status,ui.main_left+8,height-67,width-ui.main_left-32,32);
+    move(Metrics,ui.main_left+8,height-32,width-ui.main_left-32,24);
+    if(home){
+        const auto view=homeGeometry(ui);ui.home_scroll=view.clampScroll(ui.home_scroll);
+        for(int i=0;i<kFeatureCount;++i){
+            const auto area=view.card(i,ui.home_scroll),visible=view.visible(i,ui.home_scroll);
+            move(HomeBase+i,area.left,area.top,area.width(),area.height());
+            const auto handle=child(window,HomeBase+i);
+            if(visible.height()){
+                const auto region=CreateRectRgn(0,px(visible.top-area.top),px(area.width()),px(visible.bottom-area.top));
+                if(!SetWindowRgn(handle,region,TRUE))DeleteObject(region);
+                ShowWindow(handle,SW_SHOW);
+            }
         }
-        move(Status, ui.main_left + 12, height - 67, width - ui.main_left - 36, 32);
-        move(Metrics, ui.main_left + 12, height - 32, width - ui.main_left - 36, 24);
-        ui.image_search.layout({}, false);
-        return;
+        if(view.clampScroll(100000)>0){
+            move(HomePrevious,32,height-148,100);move(HomeNext,144,height-148,100);
+            ShowWindow(child(window,HomePrevious),SW_SHOW);ShowWindow(child(window,HomeNext),SW_SHOW);
+        }
+        EnableWindow(child(window,HomePrevious),ui.home_scroll>0);
+        EnableWindow(child(window,HomeNext),ui.home_scroll<view.clampScroll(100000));
+        ui.image_search.layout({},false);return;
     }
-    const bool photo_page = !usesCamera(ui.page);
-    ToolbarLayout toolbar(ui.main_left + 8, width - 20, 80);
-    const int compact = width < 1100;
-    for (const auto item : {std::pair<int, int>{Device, compact ? 180 : 228}, {RefreshDevices, 56}, {Open, compact ? 94 : 108},
-            {Close, compact ? 94 : 108}, {Resolution, 110}, {Rotation, 104}, {Mirror, 104}, {Apply, 112}}) {
-        const auto area = toolbar.place(item.second);
-        move(item.first, area.left, area.top, area.width(), item.first == Device || item.first == Resolution || item.first == Rotation ? 260 : 34);
+    int header_x=ui.main_left+8;
+    auto header=[&](int id,int w){move(id,header_x,82,w);header_x+=w+8;ShowWindow(child(window,id),SW_SHOW);};
+    if(ui.page==Page::Search)header(Enroll,136);
+    if(ui.page==Page::Search||ui.page==Page::ImageSearch||ui.page==Page::Verification)header(GoGallery,136);
+    if(hasFeatureParameters(ui.page))header(Parameters,136);
+    setText(window,GoGallery,ui.page==Page::Verification?L"选择基准":L"人脸库");
+    const bool camera_page=usesCamera(ui.page);
+    ToolbarLayout toolbar(ui.main_left+8,width-20,130);
+    auto toolbarControl=[&](int id,int w){const auto r=toolbar.place(w);move(id,r.left,r.top,r.width(),id==Device||id==Resolution||id==Rotation?260:34);ShowWindow(child(window,id),SW_SHOW);};
+    if(camera_page){
+        toolbarControl(Device,width<1100?180:228);toolbarControl(RefreshDevices,56);toolbarControl(Open,108);toolbarControl(Close,108);
+        if(camera_settings){toolbarControl(Resolution,110);toolbarControl(Rotation,104);toolbarControl(Mirror,104);}
+        if(camera_settings||ui.parameters_open)toolbarControl(Apply,112);
     }
-    for (const int id : {Device, RefreshDevices, Open, Close, Resolution, Rotation, Mirror, Apply})
-        ShowWindow(child(window, id), photo_page ? SW_HIDE : SW_SHOW);
-    ui.card_top = photo_page ? 110 : toolbar.y + 80;
-    const int preview_left = ui.main_left + ui.parameter_width + 14;
-    // Parameter and preview cards stay within the working area at 125/150% DPI.
-    // 在 125%/150% DPI 下，参数与预览卡片仍限制在工作区内。
-    ui.parameters = rect(ui.main_left, ui.card_top, ui.parameter_width, std::max(1, height - 80 - ui.card_top));
-    ui.canvas = rect(preview_left, ui.card_top, std::max(1, width - preview_left - 20), std::max(1, height - 80 - ui.card_top));
-    ui.view_height = std::max(1, height - 194 - ui.card_top);
-    MoveWindow(ui.pane, px(ui.main_left + 10), px(ui.card_top + 40), px(ui.parameter_width - 20), px(ui.view_height), TRUE);
-    for (int id = PersonId; id <= ReleaseMemory; ++id) {
-        ShowWindow(child(window, id), SW_HIDE); ShowWindow(child(window, id + kLabelOffset), SW_HIDE);
-    }
-    int y = 8;
-    auto row = [&](int id, bool labelled = true) {
-        if (id == primaryAction(ui.page)) return;
-        ShowWindow(child(window, id), SW_SHOW);
-        if (labelled && child(window, id + kLabelOffset)) {
-            ShowWindow(child(window, id + kLabelOffset), SW_SHOW);
-            move(id + kLabelOffset, 8, y - ui.scroll, ui.parameter_width - 58, 22);
-            move(id, 8, y + 25 - ui.scroll, ui.parameter_width - 58, 34); y += 76;
-        } else { move(id, 8, y - ui.scroll, ui.parameter_width - 58, id == SearchMode || id == Actions ? 280 : 36); y += 46; }
+    ui.card_top=camera_page?toolbar.y+80:ui.page==Page::ImageSearch?156:110;
+    const int preview_left=pane_visible?ui.main_left+ui.parameter_width+14:ui.main_left;
+    ui.parameters=rect(ui.main_left,ui.card_top,ui.parameter_width,std::max(1,height-80-ui.card_top));
+    const int canvas_bottom=pane_visible||camera_settings?height-80:height-164;
+    ui.canvas=rect(preview_left,ui.card_top,std::max(1,width-preview_left-20),std::max(1,canvas_bottom-ui.card_top));
+    ui.view_height=std::max(1,height-194-ui.card_top);
+    MoveWindow(ui.pane,px(ui.main_left+10),px(ui.card_top+40),px(ui.parameter_width-20),px(ui.view_height),TRUE);
+    int y=8;
+    auto row=[&](int id,bool labelled=true){
+        if(id==primaryAction(ui.page))return;
+        ShowWindow(child(window,id),SW_SHOW);
+        if(labelled&&child(window,id+kLabelOffset)){
+            ShowWindow(child(window,id+kLabelOffset),SW_SHOW);
+            move(id+kLabelOffset,8,y-ui.scroll,ui.parameter_width-58,22);
+            move(id,8,y+25-ui.scroll,ui.parameter_width-58,34);y+=76;
+        }else{move(id,8,y-ui.scroll,ui.parameter_width-58,id==SearchMode||id==Actions?280:36);y+=46;}
     };
-    if (ui.page == Page::Gallery) { row(FilterGroup); row(FilterTag); }
-    if (ui.page == Page::Reference || ui.page == Page::Verification || ui.page == Page::Enrollment || ui.page == Page::Gallery) row(PersonId);
-    if (ui.page == Page::Search || ui.page == Page::Enrollment || ui.page == Page::Gallery) { row(Group); row(Tag); }
-    switch (ui.page) {
-        case Page::Detection: row(MaxFaces); row(Details, false); break;
-        case Page::Reference:
-            row(PickA, false); row(ImageReference, false); row(GalleryReference, false);
-            row(ImportReference, false); row(ExportFeature, false); row(ExportPreview, false); break;
-        case Page::Verification:
-            row(GalleryReference, false); row(ImportReference, false); row(Threshold); row(Actions, false); row(CustomActions);
-            row(Silent, false); row(Multiple, false); break;
-        case Page::Liveness: row(Actions, false); row(CustomActions); row(Multiple, false); row(ExportPreview, false); break;
-        case Page::Search:
-            row(SearchMode, false); row(MaxFaces); row(Silent, false); row(Threshold); row(Interval); row(Timeout);
-            row(Enroll, false); row(GoGallery, false); break;
-        case Page::Enrollment:
-            row(SaveEnrollment, false); row(PickA, false); row(ImageEnroll, false); row(GoGallery, false); break;
-        case Page::ImageSearch: row(SearchGuide, false); row(SearchImageAgain, false); row(GoGallery, false); break;
-        case Page::Comparison: row(Threshold); row(PickA, false); row(PickB, false); break;
-        case Page::Home: case Page::CameraSettings: break;
+    if(ui.page==Page::Gallery){row(FilterGroup);row(FilterTag);}
+    if(ui.page==Page::Reference||ui.page==Page::Verification||ui.page==Page::Enrollment||ui.page==Page::Gallery)row(PersonId);
+    if(ui.page==Page::Search||ui.page==Page::Enrollment||ui.page==Page::Gallery){row(Group);row(Tag);}
+    switch(ui.page){
+        case Page::Detection:row(MaxFaces);row(Details,false);break;
+        case Page::Reference:row(PickA,false);row(ImageReference,false);row(GalleryReference,false);row(ImportReference,false);row(ExportFeature,false);row(ExportPreview,false);break;
+        case Page::Verification:row(ImportReference,false);row(Threshold);row(Actions,false);row(CustomActions);row(Silent,false);row(Multiple,false);break;
+        case Page::Liveness:row(Actions,false);row(CustomActions);row(Multiple,false);row(ExportPreview,false);break;
+        case Page::Search:row(SearchMode,false);row(MaxFaces);row(Silent,false);row(Threshold);row(Interval);row(Timeout);break;
+        case Page::Enrollment:row(SaveEnrollment,false);row(PickA,false);row(ImageEnroll,false);break;
+        case Page::Comparison:row(Threshold);row(PickA,false);row(PickB,false);break;
         case Page::Gallery:
-            row(UpdatePerson, false); row(DeletePerson, false); row(GalleryReference, false);
-            row(ImportJson, false); row(ImportImages, false); row(ExportJson, false); row(PreviousPage, false); row(NextPage, false); row(ReleaseMemory, false); break;
+            row(UpdatePerson,false);row(DeletePerson,false);
+            if(ui.history.parent(ui.page)==Page::Verification)row(GalleryReference,false);
+            row(ImportJson,false);row(ImportImages,false);row(ExportJson,false);row(PreviousPage,false);row(NextPage,false);row(ReleaseMemory,false);break;
+        case Page::Home:case Page::CameraSettings:case Page::ImageSearch:break;
     }
-    ui.content_height = y;
-    const int offset = std::clamp(ui.scroll, 0, std::max(0, y - ui.view_height));
-    if (offset != ui.scroll) { ui.scroll = offset; layout(ui); return; }
-    SCROLLINFO info{sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS, 0, std::max(0, y - 1), static_cast<UINT>(ui.view_height), ui.scroll, 0};
-    SetScrollInfo(ui.pane, SB_VERT, &info, TRUE);
-    move(Primary, ui.main_left + 18, height - 148, ui.parameter_width - 36, 36); move(Cancel, ui.main_left + 18, height - 108, ui.parameter_width - 36, 24);
-    ShowWindow(child(window, Cancel), camera_settings ? SW_HIDE : SW_SHOW);
-    if (camera_settings) ui.canvas = rect(ui.main_left, ui.card_top, std::max(1, width - ui.main_left - 20), std::max(1, height - 80 - ui.card_top));
-    move(People, preview_left + 14, ui.card_top + 50, std::max(1, width - preview_left - 48), std::max(1, height - ui.card_top - 148)); ShowWindow(child(window, People), ui.page == Page::Gallery ? SW_SHOW : SW_HIDE);
-    const int column_widths[] = {210, 140, 160, 160};
-    for (int i = 0; i < 4; ++i) ListView_SetColumnWidth(child(window, People), i, px(column_widths[i]));
-    move(Status, ui.main_left + 12, height - 67, width - ui.main_left - 36, 32); move(Metrics, ui.main_left + 12, height - 32, width - ui.main_left - 36, 24);
-    setText(window, MaxFaces + kLabelOffset, ui.page == Page::Search ? L"最多人脸（1–5）" : L"最多人脸（1–10）");
-    setText(window, Group + kLabelOffset, ui.page == Page::Search ? L"搜索范围分组（留空为全部）" : L"人员分组");
-    setText(window, Tag + kLabelOffset, ui.page == Page::Search ? L"搜索范围标签（留空为全部）" : L"人员标签");
-    setText(window, Threshold + kLabelOffset, ui.page == Page::Search ? L"相似度阈值（0.75–0.85）" : L"相似度阈值（0–1）");
-    setText(window, Primary, primaryTitle(ui.page));
-    setText(window, StartFlow, primaryTitle(ui.page));
-    setText(window, PickA, ui.page == Page::Detection ? L"选择图片并检测" : ui.page == Page::Enrollment ? L"选择待录入图片" : L"选择图片 A / 基准图片");
-    ui.image_search.layout(ui.canvas, ui.page == Page::ImageSearch);
-    InvalidateRect(ui.pane, nullptr, TRUE);
+    ui.content_height=y;
+    const int offset=std::clamp(ui.scroll,0,std::max(0,y-ui.view_height));
+    if(offset!=ui.scroll){ui.scroll=offset;layout(ui);return;}
+    SCROLLINFO info{sizeof(info),SIF_RANGE|SIF_PAGE|SIF_POS,0,std::max(0,y-1),static_cast<UINT>(ui.view_height),ui.scroll,0};SetScrollInfo(ui.pane,SB_VERT,&info,TRUE);
+    if(pane_visible){move(Primary,ui.main_left+18,height-148,ui.parameter_width-36,36);move(Cancel,ui.main_left+18,height-108,ui.parameter_width-36,24);}
+    else{move(Primary,ui.main_left+8,height-148,220,36);move(Cancel,ui.main_left+240,height-148,180,36);}
+    if(ui.page==Page::ImageSearch){
+        const int slot=std::max(1,std::min(220,(width-ui.main_left-48)/3));
+        move(Primary,ui.main_left+8,height-148,slot,36);
+        move(SearchImageAgain,ui.main_left+slot+20,height-148,slot,36);ShowWindow(child(window,SearchImageAgain),SW_SHOW);
+        move(Cancel,ui.main_left+slot*2+32,height-148,slot,36);
+    }
+    ShowWindow(child(window,Cancel),camera_settings?SW_HIDE:SW_SHOW);
+    move(People,preview_left+14,ui.card_top+50,std::max(1,width-preview_left-48),std::max(1,height-ui.card_top-148));ShowWindow(child(window,People),ui.page==Page::Gallery?SW_SHOW:SW_HIDE);
+    const int column_widths[]={210,140,160,160};for(int i=0;i<4;++i)ListView_SetColumnWidth(child(window,People),i,px(column_widths[i]));
+    setText(window,MaxFaces+kLabelOffset,ui.page==Page::Search?L"最多人脸（1–5）":L"最多人脸（1–10）");
+    setText(window,Group+kLabelOffset,ui.page==Page::Search?L"搜索范围分组（留空为全部）":L"人员分组");
+    setText(window,Tag+kLabelOffset,ui.page==Page::Search?L"搜索范围标签（留空为全部）":L"人员标签");
+    setText(window,Threshold+kLabelOffset,ui.page==Page::Search?L"相似度阈值（0.75–0.85）":L"相似度阈值（0–1）");
+    setText(window,Primary,primaryTitle(ui.page));setText(window,StartFlow,primaryTitle(ui.page));
+    setText(window,PickA,ui.page==Page::Detection?L"选择图片并检测":ui.page==Page::Enrollment?L"选择待录入图片":L"选择图片 A / 基准图片");
+    ui.image_search.layout(ui.canvas,ui.page==Page::ImageSearch);InvalidateRect(ui.pane,nullptr,TRUE);
 }
+void scrollHome(Ui& ui,int position){ui.home_scroll=homeGeometry(ui).clampScroll(position);layout(ui);InvalidateRect(ui.app.window,nullptr,TRUE);}
 std::wstring updatedTime(int64_t milliseconds) {
     if (milliseconds <= 0 || milliseconds > INT64_C(253402300799999)) return L"—";
     ULARGE_INTEGER ticks{}; ticks.QuadPart = (static_cast<ULONGLONG>(milliseconds) + 11644473600000ULL) * 10000ULL;
@@ -367,8 +380,11 @@ void update(Ui& ui) {
     EnableWindow(child(window, RefreshDevices), ready && !state->camera_open);
     EnableWindow(child(window, Resolution), ready && !state->camera_open);
     const bool can_navigate = (!state->busy && !ui.pending_command) || ui.page == Page::ImageSearch;
-    for (int i = 0; i < kPageCount; ++i) { EnableWindow(child(window, NavBase + i), can_navigate && !state->fatal); InvalidateRect(child(window, NavBase + i), nullptr, FALSE); }
     for (int i = 0; i < kFeatureCount; ++i) EnableWindow(child(window, HomeBase + i), can_navigate && !state->fatal);
+    EnableWindow(child(window, Back), TRUE);
+    EnableWindow(child(window, Parameters), can_navigate && !state->fatal);
+    EnableWindow(child(window, HomePrevious), ui.home_scroll > 0);
+    EnableWindow(child(window, HomeNext), ui.home_scroll < homeGeometry(ui).clampScroll(100000));
     EnableWindow(child(window, Apply), ready);
     EnableWindow(child(window, Silent), ready && (ui.page != Page::Search || selection(window, SearchMode) == 0));
     EnableWindow(child(window, CustomActions), ready && selection(window, Actions) == 7);
@@ -386,12 +402,24 @@ void update(Ui& ui) {
     EnableWindow(child(window, Rotation), ready && ui.page != Page::ImageSearch);
     EnableWindow(child(window, Mirror), ready && ui.page != Page::ImageSearch);
     const bool current_photo = state->settings.page == ui.page && (!ui.search_request_generation || state->search_generation == ui.search_request_generation);
-    ui.image_search.setState(ui.page == Page::ImageSearch && (state->busy || ui.pending_command), state->error || state->fatal,
-        current_photo ? widen(state->update.message) : L"正在读取图片并检测人脸…", current_photo ? state->search_file.filename().wstring() : L"");
-    ui.image_search.setContent(current_photo ? state->search_photo : nullptr, current_photo ? state->image_search : nullptr);
+    if (ui.page == Page::ImageSearch) {
+        ui.image_search.setState(state->busy || ui.pending_command, state->error || state->fatal,
+            current_photo ? widen(state->update.message) : L"正在读取图片并检测人脸…", current_photo ? state->search_file.filename().wstring() : L"");
+        if (current_photo) ui.image_search.setContent(state->search_photo, state->image_search);
+        else if (!ui.pending_command) ui.image_search.setContent(nullptr, nullptr);
+    }
     EnableWindow(child(window, Primary), IsWindowEnabled(child(window, primaryAction(ui.page))));
     EnableWindow(child(window, Cancel), state->flow_active || state->busy || ui.pending_command || state->pending_enrollment);
     setText(window, Apply, ui.dirty ? L"应用修改 *" : L"应用参数");
+    setText(window, Parameters, ui.parameters_open ? L"收起参数" : ui.dirty ? L"参数设置 *" : L"参数设置");
+    for (auto* returning : {&ui.return_after_save, &ui.return_after_reference}) {
+        if (*returning && state->completed_command >= *returning) {
+            const bool leave = !state->error && !state->fatal &&
+                (returning == &ui.return_after_save ? ui.page == Page::Enrollment && !state->pending_enrollment : ui.page == Page::Gallery);
+            *returning = 0;
+            if (leave) PostMessageW(window, WM_COMMAND, MAKEWPARAM(Back, BN_CLICKED), 0);
+        }
+    }
     setText(window, Pause, state->paused ? L"恢复搜索" : L"暂停搜索 / 释放缓存");
     if (ui.page == Page::Search) setText(window, Primary, state->paused ? L"恢复搜索" : L"暂停搜索");
     bool changed = state->total != ui.rendered_gallery || state->offset != ui.rendered_offset || state->people.size() != ui.rendered_people.size();
@@ -436,17 +464,18 @@ void paint(Ui& ui) {
     auto px = [&](int value) { return ui.theme.px(value); };
     auto rect = [&](int x, int y, int w, int h) { return RECT{px(x), px(y), px(x + w), px(y + h)}; };
     fill(dc, client, colors::background);
-    label(dc, L"HiFace", rect(26, 22, 132, 34), ui.theme.title, colors::primary);
-    label(dc, L"WINDOWS DEMO", rect(27, 56, 136, 20), ui.theme.small, colors::muted);
     const int logical_width = MulDiv(client.right, 96, ui.theme.dpi);
-    label(dc, page_info[static_cast<int>(ui.page)].title, rect(ui.main_left + 8, 18, std::max(1, logical_width - ui.main_left - 388), 38), ui.theme.title, colors::ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    label(dc, L"Windows x64 · CPU  /  SDK 功能体验", rect(ui.main_left + 10, 52, std::max(1, logical_width - ui.main_left - 30), 20), ui.theme.small, colors::muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    if (ui.page != Page::Home && ui.page != Page::CameraSettings) {
+    const int title_left = ui.page == Page::Home ? 32 : 128;
+    label(dc, ui.page == Page::Home ? L"HelloFace SDK" : page_info[static_cast<int>(ui.page)].title, rect(title_left, 18, std::max(1, logical_width - title_left - 388), 38), ui.theme.title, colors::ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    label(dc, ui.page == Page::Home ? L"Offline | Private | Fast" : page_info[static_cast<int>(ui.page)].description, rect(ui.main_left + 8, 56, std::max(1, logical_width - ui.main_left - 30), 20), ui.theme.small, colors::muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (IsWindowVisible(ui.pane)) {
         card(dc, ui.parameters, colors::surface, colors::line, px(14));
         label(dc, L"参数与操作", rect(ui.main_left + 18, ui.card_top + 8, ui.parameter_width - 36, 26), ui.theme.body, colors::ink);
     }
     if (ui.page == Page::Home) {
-        label(dc, L"每项功能使用独立页面；离开相机功能会取消当前流程。", rect(ui.main_left + 10, 78, logical_width - ui.main_left - 30, 22), ui.theme.small, colors::muted);
+        label(dc, L"选择一个独立功能；录入与人脸库从人脸搜索页进入。", rect(32, 78, logical_width - 56, 22), ui.theme.small, colors::muted);
+        const auto home = homeGeometry(ui);
+        if (home.clampScroll(100000)) label(dc, L"滚动查看八个功能入口", rect(260, MulDiv(client.bottom, 96, ui.theme.dpi) - 148, logical_width - 284, 34), ui.theme.small, colors::muted);
         BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY); SelectObject(dc, old_bitmap);
         DeleteObject(buffer); DeleteDC(dc); EndPaint(ui.app.window, &paint); return;
     }
@@ -481,10 +510,10 @@ void paint(Ui& ui) {
             title.top += px(42); title.bottom = title.top + px(70);
             const wchar_t* hint = ui.page == Page::Detection ? L"打开摄像头查看实时结果，或选择图片检测"
                 : ui.page == Page::Verification ? L"先建立 1:1 基准，再打开摄像头开始验证"
-                : ui.page == Page::CameraSettings ? L"选择设备并打开以检查画面；修改后点击应用参数，保存相机设置"
+                : ui.page == Page::CameraSettings ? L"选择设备并打开以检查画面；修改后点击应用参数，保存 SDK 参数"
                 : ui.page == Page::Enrollment ? L"相机采集或选择图片，核对预览后确认保存人员"
                 : ui.page == Page::Search ? L"打开摄像头开始搜索；录入人员请进入独立录入页"
-                : L"选择并打开摄像头，然后使用左侧主操作";
+                : L"选择并打开摄像头，然后点击下方开始按钮";
             label(dc, hint, title, ui.theme.body, RGB(157, 176, 204), DT_CENTER | DT_WORDBREAK);
         } else if (state->preview) {
             const auto fit = bitmap(dc, *state->preview, area);
@@ -569,8 +598,9 @@ void create(Ui& ui) {
     ui.pane = CreateWindowExW(WS_EX_CONTROLPARENT, panel.lpszClassName, L"参数与操作", WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN,
         0, 0, 10, 10, window, reinterpret_cast<HMENU>(ParameterPane), panel.hInstance, nullptr);
     if (!ui.pane) throw std::runtime_error("Cannot create parameter panel");
-    for (int i = 0; i < kPageCount; ++i) button(ui, NavBase + i, page_info[i].title);
     for (int i = 0; i < kFeatureCount; ++i) button(ui, HomeBase + i, page_info[static_cast<int>(feature_pages[i])].title);
+    button(ui, Back, L"返回"); button(ui, Parameters, L"参数设置");
+    button(ui, HomePrevious, L"上一屏"); button(ui, HomeNext, L"下一屏");
     button(ui, Primary, L"开始");
     combo(ui, Device, {}); button(ui, RefreshDevices, L"刷新"); button(ui, Open, L"打开摄像头"); button(ui, Close, L"关闭摄像头"); button(ui, Logs, L"打开日志"); button(ui, Help, aboutTitle().c_str());
     combo(ui, Resolution, {L"640×480", L"1280×720", L"1920×1080"}); combo(ui, Rotation, {L"旋转 0°", L"旋转 90°", L"旋转 180°", L"旋转 270°"});
@@ -584,7 +614,7 @@ void create(Ui& ui) {
     control(ui, L"BUTTON", L"允许多人（处理主目标）", Multiple, BS_AUTOCHECKBOX | WS_TABSTOP); checkBox(window, Multiple, true);
     combo(ui, SearchMode, {L"1:N 单人搜索", L"M:N 多人搜索（无活体）"});
     combo(ui, Actions, {L"不要求动作", L"随机 3 个不重复动作", L"眨眼", L"点头", L"摇头", L"张嘴", L"眨眼 → 点头", L"自定义：0摇头 1点头 2眨眼 3张嘴"}); send(window, Actions, CB_SETCURSEL, 1, 0);
-    button(ui, StartFlow, L"开始本轮"); button(ui, Enroll, L"打开独立人脸录入页");
+    button(ui, StartFlow, L"开始本轮"); button(ui, Enroll, L"人脸录入");
     button(ui, SaveEnrollment, L"确认预览并保存人员"); button(ui, Cancel, L"取消流程 / 停止导入"); button(ui, Pause, L"暂停搜索 / 释放缓存");
     button(ui, PickA, L"选择图片 A"); button(ui, PickB, L"选择图片 B"); button(ui, Compare, L"比对两张图片（最大人脸）");
     button(ui, ImageReference, L"图片 A 设为 1:1 基准"); button(ui, GalleryReference, L"该 ID 设为 1:1 基准"); button(ui, ImportReference, L"导入 HF1 基准文件");
@@ -599,16 +629,20 @@ void create(Ui& ui) {
     for (int i = 0; i < 4; ++i) { LVCOLUMNW column{}; column.mask = LVCF_TEXT | LVCF_WIDTH; column.cx = ui.theme.px(160); column.pszText = const_cast<wchar_t*>(columns[i]); ListView_InsertColumn(list, i, &column); }
     control(ui, L"STATIC", L"正在打开人脸库...", Status); control(ui, L"STATIC", L"", Metrics);
     for (int id = PersonId; id <= ReleaseMemory; ++id) {
-        if (id == Cancel) continue;
+        if (id == Cancel || id == Enroll || id == GoGallery || id == SearchImageAgain) continue;
         if (const auto field = child(window, id)) SetParent(field, ui.pane);
         if (const auto label = child(window, id + kLabelOffset)) SetParent(label, ui.pane);
     }
     HWND after = HWND_TOP;
-    for (const auto page : navigation_pages) {
-        const auto field = child(window, NavBase + static_cast<int>(page));
+    for (const int id : {Back, HomePrevious, HomeNext}) {
+        const auto field = child(window, id);
         SetWindowPos(field, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); after = field;
     }
-    const int tab_order[] = {Device, RefreshDevices, Open, Close, Resolution, Rotation, Mirror, Apply, ParameterPane, Primary, Cancel, People, Logs, Help};
+    for (int i = 0; i < kFeatureCount; ++i) {
+        const auto field = child(window, HomeBase+i);
+        SetWindowPos(field, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); after = field;
+    }
+    const int tab_order[] = {Enroll, GoGallery, Parameters, Device, RefreshDevices, Open, Close, Resolution, Rotation, Mirror, Apply, ParameterPane, Primary, SearchImageAgain, Cancel, People, Logs, Help};
     for (const int id : tab_order) {
         const auto field = child(window, id); SetWindowPos(field, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); after = field;
     }
@@ -623,6 +657,18 @@ void create(Ui& ui) {
 void action(Ui& ui, int id, int notification) {
     const auto window = ui.app.window;
     if (ui.creating) return;
+    if (id == HomePrevious || id == HomeNext) {
+        scrollHome(ui, ui.home_scroll + (id == HomePrevious ? -1 : 1) * std::max(96, homeGeometry(ui).viewport.height() - 20)); return;
+    }
+    if (id == Parameters || (id == Back && ui.parameters_open)) {
+        ui.parameters_open = !ui.parameters_open;
+        layout(ui); update(ui); InvalidateRect(window, nullptr, TRUE); SetFocus(child(window, ui.parameters_open ? Apply : Back)); return;
+    }
+    if (id == Back) {
+        if (ui.page == Page::Home) return;
+        if (ui.app.current()->importing && MessageBoxW(window, L"停止导入并返回上一级？已保存的批次会保留。", L"停止导入并返回", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+        id = NavBase + static_cast<int>(ui.history.parent(ui.page));
+    }
     if (id >= HomeBase && id < HomeBase + kFeatureCount) id = NavBase + static_cast<int>(feature_pages[id - HomeBase]);
     if (id >= NavBase && id < NavBase + kPageCount) {
         if (ui.page == static_cast<Page>(id - NavBase)) return;
@@ -633,7 +679,12 @@ void action(Ui& ui, int id, int notification) {
         previous.interval = text(window, Interval); previous.timeout = text(window, Timeout); previous.search_mode = selection(window, SearchMode);
         previous.id = text(window, PersonId); previous.group = text(window, Group); previous.tag = text(window, Tag);
         previous.filter_group = text(window, FilterGroup); previous.filter_tag = text(window, FilterTag);
-        ++ui.app.generation; ui.page = static_cast<Page>(id - NavBase); ui.scroll = 0; ui.dirty = false; ui.search_request_generation = 0;
+        const auto next_page = static_cast<Page>(id - NavBase), old_page = ui.page;
+        if ((old_page == Page::ImageSearch && next_page != Page::Gallery) || (old_page == Page::Gallery && next_page != Page::ImageSearch))
+            ui.image_search.setContent(nullptr, nullptr);
+        ui.history.moved(old_page, next_page);
+        ++ui.app.generation; ui.page = next_page; ui.scroll = 0; ui.dirty = false; ui.search_request_generation = 0; ui.parameters_open = false;
+        ui.return_after_save = ui.return_after_reference = 0;
         const auto& next = ui.drafts[static_cast<size_t>(ui.page)];
         ui.creating = true;
         setText(window, MaxFaces, next.max_faces); setText(window, Threshold, next.threshold); setText(window, CustomActions, next.actions);
@@ -650,7 +701,12 @@ void action(Ui& ui, int id, int notification) {
             settings = ui.app.current()->settings; settings.page = ui.page; ui.dirty = true;
             ui.parameter_notice = L"已保留未应用的参数，请修正后再执行操作。";
         }
-        layout(ui); ui.pending_command = ui.app.enqueue({Action::Apply, std::move(settings), {}, 0}); update(ui); return;
+        layout(ui);
+        ui.pending_command = ui.app.current()->fatal ? 0 : ui.app.enqueue({Action::Apply, std::move(settings), {}, 0});
+        update(ui);
+        if (ui.page == Page::Home) SetFocus(child(window, HomeBase + std::max(0, homeIndex(old_page))));
+        else SetFocus(child(window, Back));
+        InvalidateRect(window, nullptr, TRUE); return;
     }
     if (id == Primary) { if (!IsWindowEnabled(child(window, Primary))) return; id = primaryAction(ui.page); }
     if ((notification == EN_CHANGE && id >= PersonId && id <= CustomActions)
@@ -673,16 +729,17 @@ void action(Ui& ui, int id, int notification) {
             if (reinterpret_cast<INT_PTR>(ShellExecuteW(window, L"open", logDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32) throw std::runtime_error("Cannot open log directory");
             break;
         case Help: MessageBoxW(window,
-            L"首页前八项按 Android 顺序排列；人脸录入、人脸库另有独立入口。\n\n"
+            L"首页仅保留 Android 的八个纵向入口；录入、人脸库从人脸搜索页进入。\n"
+            L"各页顶部“返回”回到上一级；参数设置在本功能内打开。\n\n"
             L"人脸录入先采集、核对预览和 ID，再确认保存；重拍、取消或离页不会写入人脸库。\n"
             L"先运行 self_test.bat；相机功能先选择设备并打开，再开始本轮流程。更改参数后点“应用参数”。\n"
             L"1:1 验证先用相机、图片或人脸库 ID 建立基准；基准会在本机保存。\n"
             L"图片人脸搜索支持最多 10 张脸、全库 Top-1 / 0.80、不执行活体；点击缩略图或人脸框可选择。\n"
-            L"图片搜索快捷键：Ctrl+O 选图、F5 重新搜索、Esc 取消；结果详情可选中复制，Ctrl+A 全选。\n"
+            L"图片搜索快捷键：Ctrl+O 选图、F5 重新搜索、Esc 返回上一级；结果详情可选中复制，Ctrl+A 全选。\n"
             L"人脸库支持分组/标签、每页100条、删除、原始HF1 JSON导入导出、本地图片批量提取。\n"
             L"图片导入使用文件名（不含扩展名）作ID；JSON和批量图片按ID覆盖，取消保留已保存数据。\n"
             L"分辨率为协商目标；镜像只影响显示。应用参数后保存分辨率、旋转和镜像，重启仍可使用。\n"
-            L"相机设置只预览，不执行人脸分析；切换独立页面会关闭相机并取消当前流程。\n\n"
+            L"SDK参数设置只预览，不执行人脸分析；切换独立页面会关闭相机并取消当前流程。\n\n"
             L"数据与日志：%LOCALAPPDATA%\\HiFaceDemo\n"
             L"Windows 10/11 x64、CPU 开发候选版；真人识别和摄像头兼容性需要真机确认。", aboutTitle().c_str(), MB_OK); break;
         case StartFlow:
@@ -692,7 +749,7 @@ void action(Ui& ui, int id, int notification) {
         case SaveEnrollment:
             if (ui.app.current()->pending_enrollment && MessageBoxW(window,
                 (L"确认将当前预览保存为人员 ID: " + text(window, PersonId) + L"？重复 ID 会拒绝保存。").c_str(),
-                L"确认人脸录入", MB_YESNO | MB_ICONQUESTION) == IDYES) submit(ui, Action::SaveEnrollment);
+                L"确认人脸录入", MB_YESNO | MB_ICONQUESTION) == IDYES) { submit(ui, Action::SaveEnrollment); ui.return_after_save = ui.pending_command; }
             break;
         case Cancel: ++ui.app.generation; submit(ui, Action::Cancel); break;
         case Pause: submit(ui, Action::Pause); break;
@@ -708,7 +765,10 @@ void action(Ui& ui, int id, int notification) {
         case GoGallery: action(ui, NavBase + static_cast<int>(Page::Gallery), BN_CLICKED); break;
         case Compare: submit(ui, Action::Compare); break;
         case ImageReference: submit(ui, Action::SetImageReference); break;
-        case GalleryReference: submit(ui, Action::SetGalleryReference); break;
+        case GalleryReference:
+            submit(ui, Action::SetGalleryReference);
+            if (ui.page == Page::Gallery && ui.history.parent(ui.page) == Page::Verification) ui.return_after_reference = ui.pending_command;
+            break;
         case ImportReference: {
             auto files = choose(window, false, false, kFeature); if (!files.empty()) submit(ui, Action::ImportReference, std::move(files)); break;
         }
@@ -742,11 +802,12 @@ void action(Ui& ui, int id, int notification) {
 }
 bool shortcut(Ui& ui, const MSG& message) {
     if (message.message != WM_KEYDOWN || GetKeyState(VK_MENU) < 0) return false;
-    if (message.wParam == VK_ESCAPE && !ui.app.current()->flow_active && !ui.app.current()->busy && !ui.pending_command) {
-        action(ui, NavBase + static_cast<int>(Page::Home), BN_CLICKED); return true;
+    if (ui.page == Page::Home && (message.wParam == VK_PRIOR || message.wParam == VK_NEXT || message.wParam == VK_HOME || message.wParam == VK_END)) {
+        const int delta = std::max(96, homeGeometry(ui).viewport.height() - 20);
+        scrollHome(ui, message.wParam == VK_HOME ? 0 : message.wParam == VK_END ? 100000 : ui.home_scroll + (message.wParam == VK_PRIOR ? -delta : delta)); return true;
     }
     int id = 0;
-    if (message.wParam == VK_ESCAPE) id = Cancel;
+    if (message.wParam == VK_ESCAPE) id = Back;
     else if (ui.page == Page::ImageSearch) {
         if (message.wParam == 'O' && GetKeyState(VK_CONTROL) < 0) id = PickSearchImage;
         else if (message.wParam == VK_F5 && GetKeyState(VK_CONTROL) >= 0) id = SearchImageAgain;
@@ -781,12 +842,19 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
                 const auto* bounds = reinterpret_cast<RECT*>(lparam); SetWindowPos(window, nullptr, bounds->left, bounds->top, bounds->right - bounds->left, bounds->bottom - bounds->top, SWP_NOZORDER | SWP_NOACTIVATE); layout(*ui); return 0;
             }
             case WM_ERASEBKGND: return 1;
+            case kRevealFocusedControl: {
+                const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lparam));
+                if (ui->page == Page::Home && id >= HomeBase && id < HomeBase + kFeatureCount)
+                    scrollHome(*ui, homeGeometry(*ui).reveal(id - HomeBase, ui->home_scroll));
+                return 0;
+            }
             case WM_MOUSEWHEEL: {
+                if (ui->page == Page::Home) { scrollHome(*ui, ui->home_scroll - GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA * 84); return 0; }
                 const POINT pointer{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
                 const auto hover = WindowFromPoint(pointer);
                 const auto photo = ui->image_search.window();
                 if (ui->page == Page::ImageSearch && (hover == photo || IsChild(photo, hover))) return SendMessageW(photo, message, wparam, lparam);
-                return SendMessageW(ui->pane, message, wparam, lparam);
+                return IsWindowVisible(ui->pane) ? SendMessageW(ui->pane, message, wparam, lparam) : 0;
             }
             case WM_DRAWITEM: {
                 const auto& item = *reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
@@ -803,8 +871,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wparam, LPARA
                     if (item.itemState & ODS_FOCUS) { RECT focus = item.rcItem; InflateRect(&focus, -4, -4); DrawFocusRect(item.hDC, &focus); }
                     return TRUE;
                 }
-                const bool nav = item.CtlID >= NavBase && item.CtlID < NavBase + kPageCount;
-                ui->theme.button(item, item.CtlID == Primary || item.CtlID == Open, nav && static_cast<int>(item.CtlID - NavBase) == static_cast<int>(ui->page), nav); return TRUE;
+                ui->theme.button(item, item.CtlID == Primary || item.CtlID == Open, item.CtlID == Parameters && ui->parameters_open, false); return TRUE;
             }
             case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: {
                 const auto dc = reinterpret_cast<HDC>(wparam); const auto control = reinterpret_cast<HWND>(lparam);

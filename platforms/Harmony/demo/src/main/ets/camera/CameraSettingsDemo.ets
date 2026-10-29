@@ -37,7 +37,7 @@ export struct CameraSettingsDemo {
 
   build() {
     Column() {
-      DemoPageHeader({ title: DemoL10n.text("摄像头参数设置"), onBack: (): void => this.onExit() })
+      DemoPageHeader({ title: DemoL10n.text("SDK参数设置"), onBack: (): void => this.onExit() })
 
       Scroll() {
         Column({ space: 18 }) {

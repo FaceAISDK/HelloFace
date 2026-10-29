@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.1]
+
+- Aligned the Demo SDK Settings entry with the other platforms.
+- Check release inputs before building and bind the delivery report and README to the exact packaged HAR bytes.
+- Retain the reviewed public API, feature space and encrypted model baseline. Candidate builds, device acceptance and publication approval remain pending.
+
 ## [0.8.0] - Preparation, not published
 
 - Changed the authorization-state persistence checkpoint to 10 seconds while retaining per-use and output-boundary validation.

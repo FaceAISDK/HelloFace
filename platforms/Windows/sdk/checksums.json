@@ -5,7 +5,7 @@
     "LICENSE": "2ced525016b98a3faa216457a7cd067060034a9e25ef0fb0fcd699f437c65ab6",
     "README.md": "c575393cbd87ff36711a90cf185aab4fc769189f24835c7052079d7e75e01aac",
     "README.zh-CN.md": "0b7916b180ecb26ef1c39bbdd416301b8466fc622be523b19866fca914b2e309",
-    "bin/hiface.dll": "04ea9a508fe5426a67f9162df4a2cf5d75f141283f5daea3f167bc0c00acefc9",
+    "bin/hiface.dll": "428b388af4017c6e53b6b43fc1ed39d2f5b55d048238740b60086cbd8938b36a",
     "bin/libc++.dll": "b97586e466fbcbd3f801448802038a4f7550fc7e0381cd873b486cd59fdd2305",
     "bin/libomp.dll": "caa72f2795fd6bf82a137969ce417f8d43e8e88483b13c2e474069616e546bab",
     "bin/libunwind.dll": "0d86a6dfb5a20082b4d74c43a8ce36a30eb2748e4e779c336d174a876ef569c6",
@@ -13,7 +13,7 @@
     "include/hiface/hiface_contract_v1.h": "6ecb6815d3e49d46083d5775471fba7b4d1edef3780adcdd625dc1268f6e7b68",
     "include/hiface/hiface_windows.h": "6d62c95b4fcaa1046021fed255da9a164d920d4f2115035b1a29df5a603db73e",
     "lib/cmake/HiFace/HiFaceConfig.cmake": "6fc1fc1f1096f41eced2f2b5abbdadf92f18f71a4a13fbb08ddec627fdef9d85",
-    "lib/cmake/HiFace/HiFaceConfigVersion.cmake": "14eca83d818a58326a74c57ef85db0311b47997effb605dbefa8117ed4acaa44",
+    "lib/cmake/HiFace/HiFaceConfigVersion.cmake": "7122e70f950d9bb9986a2b2819d1cfeca7b11f0445c88167ac12d2f857559f43",
     "lib/cmake/HiFace/HiFaceWindowsTargets-release.cmake": "582ff92c10d499209bbfa1ef4cd689f0412f95f0698575c7770eb62c29b4013f",
     "lib/cmake/HiFace/HiFaceWindowsTargets.cmake": "490d6ab83090d516757f0b5abeefc692d671e85a5bbc499f6e5a5c04ad3ac77f",
     "lib/hiface.lib": "80586b563e543071b96764001b8d8dd467f301c23aa41858004a666251a36c11",
@@ -23,7 +23,7 @@
     "licenses/mingw-w64/COPYING.MinGW-w64.txt": "f38e6194bd3bfa1b654f118e5acefe0aead437bbe669eee43957ccc65a7127f1",
     "licenses/mingw-w64/COPYING.winpthreads.txt": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177",
     "licenses/mingw-w64/COPYING.winstorecompat.txt": "fa7368d1f93d890c173177475d8ec7aff265a7d08f1f364d66f74d138978ce36",
-    "sdk-metadata.json": "2ac20b5d204313ab48639759748a817428f9315797514af83f1e64a3641a72ab",
+    "sdk-metadata.json": "243ab882b4d04c56a41bdbf29d65d78017151af071a6adc1a7fc841950d772f5",
     "share/hiface/exports.txt": "e8059b6bf191a4e42f4e42dd9d423919c42cb3659238b769e3220d1d7a4ce37b"
   }
 }

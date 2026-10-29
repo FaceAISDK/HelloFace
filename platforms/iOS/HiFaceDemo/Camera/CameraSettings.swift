@@ -48,7 +48,7 @@ struct CameraSettingsView: View {
         .preferredColorScheme(.light)
         .navigationBarHidden(false)
         .tint(DemoTheme.contentAccent)
-        .navigationTitle(DemoL10n.text("摄像头参数设置"))
+        .navigationTitle(DemoL10n.text("SDK参数设置"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             resolution = CameraAnalysisResolution(storedValue: resolution).rawValue

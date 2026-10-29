@@ -59,7 +59,7 @@ struct DemoHomeView: View {
                             DemoCard(title: DemoL10n.text("图片人脸搜索识别"), subtitle: DemoL10n.text("检测图片中的多个人脸并搜索人脸库"), icon: "person.crop.rectangle.stack")
                         }
                         NavigationLink(destination: LazyDestination { CameraSettingsView() }) {
-                            DemoCard(title: DemoL10n.text("摄像头参数设置"), subtitle: DemoL10n.text("设置分析分辨率与坐标镜像"), icon: "slider.horizontal.3")
+                            DemoCard(title: DemoL10n.text("SDK参数设置"), subtitle: DemoL10n.text("设置分析分辨率与坐标镜像"), icon: "slider.horizontal.3")
                         }
                     }
                     .buttonStyle(HomeFeatureButtonStyle())

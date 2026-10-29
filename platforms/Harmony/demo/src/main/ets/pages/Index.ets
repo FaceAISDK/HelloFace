@@ -343,7 +343,7 @@ struct Index {
           DemoL10n.text("比对两张图片中的人脸"), (): void => this.navigate(DemoPage.COMPARISON))
         this.FeatureCard($r('app.media.ic_search_search'), DemoL10n.text("图片人脸搜索识别"),
           DemoL10n.text("检测图片中的多个人脸并搜索人脸库"), (): void => this.navigate(DemoPage.IMAGE_SEARCH))
-        this.FeatureCard($r('app.media.ic_search_settings'), DemoL10n.text("摄像头参数设置"),
+        this.FeatureCard($r('app.media.ic_search_settings'), DemoL10n.text("SDK参数设置"),
           DemoL10n.text("设置分析分辨率与坐标镜像"), (): void => this.navigate(DemoPage.CAMERA_SETTINGS))
         Text(this.aboutTitle()).height(42).fontSize(12).fontColor(DemoTheme.textOnDarkSecondary)
           .width('100%').textAlign(TextAlign.Center).margin({ top: 3 })

@@ -32,7 +32,7 @@
     <string name="feature_face_search_desc">识别人脸库中的身份</string>
     <string name="feature_face_compare">静态人脸 1:1 对比</string>
     <string name="feature_face_compare_desc">比对两张图片中的人脸</string>
-    <string name="feature_camera_settings">摄像头参数设置</string>
+    <string name="feature_camera_settings">SDK参数设置</string>
     <string name="feature_camera_settings_desc">设置分析分辨率与坐标镜像</string>
     <string name="cd_about">关于</string>
     <string name="cd_back">返回</string>

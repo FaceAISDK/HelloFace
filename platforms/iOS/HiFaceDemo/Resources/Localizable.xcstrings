@@ -4285,19 +4285,19 @@
         }
       }
     },
-    "摄像头参数设置": {
+    "SDK参数设置": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Camera Settings"
+            "value": "SDK Settings"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "摄像头参数设置"
+            "value": "SDK参数设置"
           }
         }
       }

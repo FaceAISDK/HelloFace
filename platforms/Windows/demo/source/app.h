@@ -36,7 +36,7 @@ struct Snapshot {
     uint32_t offset = 0;
     uint64_t completed_command = 0, search_generation = 0;
     bool error = false, pending_enrollment = false;
-    bool camera_open = false, busy = false, flow_active = false, paused = false, has_reference = false, fatal = false;
+    bool camera_open = false, busy = false, importing = false, flow_active = false, paused = false, has_reference = false, fatal = false;
     double capture_fps = 0, analysis_fps = 0, inference_ms = 0;
 };
 enum class Action { Apply, OpenCamera, CloseCamera, StartFlow, Cancel, Pause,
